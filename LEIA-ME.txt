@@ -1,2 +1,2 @@
 
-Versão v3.3: ajuste fino visual e espacial para aproximar do Merge Cube. Terra reduzida (EARTH_RADIUS 0.030), objeto levemente recuado no eixo Z, ancoragem de 1 face mais rígida em Z/XY, Lua menor e mais próxima, Sol e brilho mais discretos, e iluminação geral mais suave.
+Versão v4.0 AutoCal: calibração automática durante o uso. Coleta observações multiface em diferentes combinações e tamanhos, testa vários FOVs e escolhe o que reduz o erro de reprojeção. Salva o FOV no localStorage. Dois toques rápidos no título apagam a calibração salva.
