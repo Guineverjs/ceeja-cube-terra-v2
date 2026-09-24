@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>CEEJA Cube — Terra Realista v2.6</title>
+<title>CEEJA Cube — Terra Realista v2.7</title>
 <style>
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070a;font-family:Arial,sans-serif;color:white}
 #video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover;background:#000}
@@ -18,7 +18,7 @@
 <body>
 <video id="video" autoplay muted playsinline></video>
 <canvas id="overlay"></canvas>
-<div id="top"><div id="title">🌍 CEEJA Cube — Terra Realista v2.6</div>
+<div id="top"><div id="title">🌍 CEEJA Cube — Terra Realista v2.7</div>
 <div id="status">Pronto para iniciar.</div><button id="start">ABRIR CÂMERA</button></div>
 <div id="faces"><span class="muted">Nenhuma face detectada ainda.</span></div>
 <canvas id="work" width="480" height="360" style="display:none"></canvas>
@@ -39,23 +39,24 @@ facesEl=document.getElementById("faces"), start=document.getElementById("start")
 let ready=false, busy=false, cvReady=false, cv=null;
 let templates=[], lastPose=null, lastPoseAt=0, smoothedPose=null;
 let lastMultiPose=null, lastMultiPoseAt=0, lastDrawState=null;
+let strongAnchorUntil=0;
 
-const FALLBACK_MS=500;
+const FALLBACK_MS=650;
 const POS_ALPHA_MULTI=.42, POS_ALPHA_SINGLE=.18;
 const ROT_ALPHA_MULTI=.38, ROT_ALPHA_SINGLE=.16;
 const MAX_SINGLE_JUMP_M=.055;
 const MAX_REPROJ_MULTI=8.0, MAX_REPROJ_SINGLE=5.8;
-const MULTI_ANCHOR_MS=1800;
+const MULTI_ANCHOR_MS=2400;
 const SINGLE_Z_CLAMP=.010;
 const SINGLE_Z_BLEND=.88;
 const SINGLE_XY_BLEND=.55;
-const SINGLE_SCREEN_RADIUS_STEP=.08;
-const SINGLE_SCREEN_CENTER_BLEND=.32;
-const MULTI_SCREEN_RADIUS_BLEND=.38;
-const MULTI_SCREEN_CENTER_BLEND=.46;
+const SINGLE_SCREEN_RADIUS_STEP=.045;
+const SINGLE_SCREEN_CENTER_BLEND=.22;
+const MULTI_SCREEN_RADIUS_BLEND=.28;
+const MULTI_SCREEN_CENTER_BLEND=.34;
 const HALF=.022;          // cube: 44 mm
 const TAG_HALF=.01585;    // marker black square: 31.7 mm / 2
-const EARTH_RADIUS=.060;  // 12 cm diameter virtual Earth
+const EARTH_RADIUS=.050;  // 12 cm diameter virtual Earth
 const TEMPLATE_SIZE=32;
 const MIN_MATCH=0.67;
 const MIN_AREA=850;
@@ -400,6 +401,7 @@ function smoothPose(raw){
    if(!raw.single){
      lastMultiPose={...smoothedPose,R:smoothedPose.R.slice(),t:smoothedPose.t.slice()};
      lastMultiPoseAt=now;
+     strongAnchorUntil=now+700;
    }
    return smoothedPose;
  }
@@ -414,13 +416,17 @@ function smoothPose(raw){
  // Quando houver só 1 face, confiamos mais na última pose multiface
  // para profundidade (Z) e parcialmente para X/Y.
  if(raw.single && lastMultiPose && (now-lastMultiPoseAt)<=MULTI_ANCHOR_MS){
+   const freshStrong = now<strongAnchorUntil;
+   const zBlend = freshStrong ? .95 : SINGLE_Z_BLEND;
+   const xyBlend = freshStrong ? .72 : SINGLE_XY_BLEND;
+
    const az=lastMultiPose.t[2];
    const dz=clamp(targetT[2]-az,-SINGLE_Z_CLAMP,SINGLE_Z_CLAMP);
-   const anchoredZ=az + dz*(1-SINGLE_Z_BLEND);
+   const anchoredZ=az + dz*(1-zBlend);
 
    const ax=lastMultiPose.t[0], ay=lastMultiPose.t[1];
-   const anchoredX=ax + (targetT[0]-ax)*(1-SINGLE_XY_BLEND);
-   const anchoredY=ay + (targetT[1]-ay)*(1-SINGLE_XY_BLEND);
+   const anchoredX=ax + (targetT[0]-ax)*(1-xyBlend);
+   const anchoredY=ay + (targetT[1]-ay)*(1-xyBlend);
 
    targetT[0]=anchoredX;
    targetT[1]=anchoredY;
@@ -435,6 +441,7 @@ function smoothPose(raw){
  if(!raw.single){
    lastMultiPose={...smoothedPose,R:smoothedPose.R.slice(),t:smoothedPose.t.slice()};
    lastMultiPoseAt=now;
+   strongAnchorUntil=now+700;
  }
 
  return smoothedPose;
@@ -548,7 +555,7 @@ async function loop(){
     else if(!ds.length){ smoothedPose=null; lastDrawState=null; }
     drawEarth(ds,W,H,pose);
     if(rawPose){
-      statusEl.textContent=(rawPose.single?'Transição estabilizada • 1 face':'Terra ancorada ✓ • '+rawPose.faces.map(id=>N[id]).join(' + '))+' • erro '+rawPose.reproj.toFixed(1)+'px';
+      statusEl.textContent=(rawPose.single?'Âncora suave • 1 face':'Âncora forte ✓ • '+rawPose.faces.map(id=>N[id]).join(' + '))+' • erro '+rawPose.reproj.toFixed(1)+'px';
     }else if(pose){
       statusEl.textContent='Mantendo última pose…';
     }else{
