@@ -1,0 +1,14 @@
+CEEJA Cube — Terra Realista v2.0
+
+Melhorias sobre a v1.7:
+- rastreamento continua com 1 AprilTag durante a troca de faces;
+- 2+ faces continuam resolvidas como um único corpo rígido;
+- smoothing de posição e rotação;
+- fallback de 220 ms para evitar piscadas;
+- rejeição de soluções com erro de reprojeção alto;
+- rejeição de saltos grandes quando apenas uma face está visível;
+- detector um pouco mais preciso (quad_decimate 1.5);
+- Terra virtual aumentada para 12 cm de diâmetro para esconder melhor o cubo físico.
+
+Calibração mantida: FOV aproximado 45°; TAG preta 31,7 mm; cubo 44 mm.
+Envie este ZIP ao Netlify Drop sem alterar os arquivos.
