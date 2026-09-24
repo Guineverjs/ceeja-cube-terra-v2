@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>CEEJA Cube — Terra Realista v2.2</title>
+<title>CEEJA Cube — Terra Realista v2.3</title>
 <style>
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070a;font-family:Arial,sans-serif;color:white}
 #video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover;background:#000}
@@ -19,7 +19,7 @@
 <body>
 <video id="video" autoplay muted playsinline></video>
 <canvas id="overlay"></canvas>
-<div id="top"><div id="title">🌍 CEEJA Cube — Terra Realista v2.2</div>
+<div id="top"><div id="title">🌍 CEEJA Cube — Terra Realista v2.3</div>
 <div id="status">Pronto para iniciar.</div><button id="start">ABRIR CÂMERA</button></div>
 <div id="faces"><span class="muted">Nenhuma face detectada ainda.</span></div>
 <canvas id="work" width="480" height="360" style="display:none"></canvas>
@@ -74,7 +74,7 @@ async function waitForCV(){
    }
    const elapsed=performance.now()-t0;
    if(elapsed>20000) throw new Error("OpenCV demorou mais de 20 s para iniciar. Recarregue a página com internet ativa.");
-   statusEl.textContent="Carregando motor de visão… "+Math.floor(elapsed/1000)+" s";
+   statusEl.textContent="Câmera aberta ✓ • preparando motor de visão… "+Math.floor(elapsed/1000)+" s";
    await new Promise(r=>setTimeout(r,120));
  }
 }
@@ -118,9 +118,10 @@ function centerOf(c){return {x:(c[0].x+c[1].x+c[2].x+c[3].x)/4,y:(c[0].y+c[1].y+
 function dist(a,b){const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy)}
 
 async function initDetector(){
- statusEl.textContent="Carregando detector CEEJA Cube…";
+ statusEl.textContent="Câmera aberta ✓ • carregando motor de visão…";
  try{
    await waitForCV();
+   statusEl.textContent="Motor de visão pronto ✓ • carregando marcadores…";
    await waitImgs(['tpl0','tpl1','tpl2','tpl3','tpl4','tpl5']);
    templates=[];
    for(let id=0; id<6; id++){
@@ -131,23 +132,50 @@ async function initDetector(){
      cv.resize(bw,small,new cv.Size(TEMPLATE_SIZE,TEMPLATE_SIZE),0,0,cv.INTER_AREA);
      const rots=[];
      let bits=matToBits(small);
-     for(let r=0;r<4;r++){rots.push(bits); bits=rotateBits(bits,TEMPLATE_SIZE);}    
+     for(let r=0;r<4;r++){rots.push(bits); bits=rotateBits(bits,TEMPLATE_SIZE);}
      templates.push({id,rots});
      src.delete(); gray.delete(); bw.delete(); small.delete();
    }
    ready=true;
    statusEl.textContent="Detector CEEJA Cube pronto ✓";
- }catch(e){statusEl.textContent="Erro ao iniciar detector: "+e.message; console.error(e);}
+   return true;
+ }catch(e){
+   ready=false;
+   statusEl.textContent="Erro ao iniciar detector: "+e.message;
+   console.error(e);
+   throw e;
+ }
 }
-initDetector();
 
 start.onclick=async()=>{
  try{
-  const stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:"environment"},width:{ideal:1280},height:{ideal:720}}});
-  video.srcObject=stream; await video.play(); start.style.display="none";
-  statusEl.textContent=ready?"Câmera aberta • procurando o cubo…":"Câmera aberta • carregando detector…";
+  // 1) Abre a câmera primeiro. O motor de visão só começa depois do clique.
+  start.disabled=true;
+  start.textContent="ABRINDO CÂMERA…";
+  const stream=await navigator.mediaDevices.getUserMedia({
+    audio:false,
+    video:{facingMode:{ideal:"environment"},width:{ideal:1280},height:{ideal:720}}
+  });
+  video.srcObject=stream;
+  await video.play();
+
+  start.style.display="none";
+  statusEl.textContent="Câmera aberta ✓ • iniciando detector…";
+
+  // 2) Só agora carrega/prepara o detector.
+  if(!ready){
+    await initDetector();
+  }
+
+  if(ready){
+    statusEl.textContent="Detector pronto ✓ • procurando o cubo…";
+  }
   requestAnimationFrame(loop);
- }catch(e){statusEl.textContent="Não foi possível abrir a câmera: "+e.message;}
+ }catch(e){
+  start.disabled=false;
+  start.textContent="ABRIR CÂMERA";
+  statusEl.textContent="Erro ao iniciar: "+e.message;
+ }
 };
 
 function getOBJ(){

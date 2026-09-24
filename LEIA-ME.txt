@@ -1,4 +1,4 @@
-CEEJA Cube — Terra Realista v2.1
+CEEJA Cube — Terra Realista v2.2
 
 Esta versão usa detector customizado para as 6 faces do cubo que já foi montado com os marcadores antigos.
 Arquivos das faces usados pelo detector ficam na pasta /markers.
@@ -6,3 +6,9 @@ Arquivos das faces usados pelo detector ficam na pasta /markers.
 Hospedagem:
 - GitHub Pages: publicar a branch main com / (root)
 - Netlify: pode publicar a pasta inteira normalmente.
+
+Correção v2.2: carregamento do OpenCV trocado por build único via jsDelivr, com diagnóstico de timeout.
+
+Nesta variante, os 6 arquivos PNG dos marcadores ficam soltos na raiz do repositório, ao lado do index.html.
+
+Correção v2.3: o OpenCV/detector só é inicializado depois que a usuária toca em ABRIR CÂMERA.
