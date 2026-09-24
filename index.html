@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>CEEJA Cube — Terra Realista v2.8</title>
+<title>CEEJA Cube — Terra 3D v3.0</title>
 <style>
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070a;font-family:Arial,sans-serif;color:white}
 #video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover;background:#000}
@@ -13,14 +13,16 @@
 #faces{position:fixed;z-index:5;bottom:15px;left:50%;transform:translateX(-50%);width:min(92vw,480px);background:rgba(5,8,14,.84);padding:12px;border-radius:16px;text-align:center;font-size:13px;line-height:1.5}
 .ok{font-weight:800}.muted{opacity:.65}
 #start{margin-top:10px;border:0;border-radius:999px;padding:10px 18px;font-weight:800;font-size:14px}
+#planetLabel{position:fixed;z-index:6;display:none;pointer-events:none;padding:7px 12px;border-radius:999px;background:rgba(7,11,18,.82);backdrop-filter:blur(8px);border:1px solid rgba(173,232,255,.32);font-size:12px;font-weight:800;letter-spacing:.08em;color:#d8f4ff;box-shadow:0 0 18px rgba(85,184,255,.18)}
 </style>
 </head>
 <body>
 <video id="video" autoplay muted playsinline></video>
 <canvas id="overlay"></canvas>
-<div id="top"><div id="title">🌍 CEEJA Cube — Terra Realista v2.8</div>
+<div id="top"><div id="title">🌍 CEEJA Cube — Terra 3D v3.0</div>
 <div id="status">Pronto para iniciar.</div><button id="start">ABRIR CÂMERA</button></div>
 <div id="faces"><span class="muted">Nenhuma face detectada ainda.</span></div>
+<div id="planetLabel">EARTH • 3D</div>
 <canvas id="work" width="480" height="360" style="display:none"></canvas>
 <img id="earthTexture" crossorigin="anonymous" src="https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg" style="display:none">
 <div style="display:none">
@@ -31,15 +33,19 @@
   <img id="tpl4" src="./4_TOPO.png">
   <img id="tpl5" src="./5_BASE.png">
 </div>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 <script>
 const N={0:"FRENTE",1:"DIREITA",2:"ATRÁS",3:"ESQUERDA",4:"TOPO",5:"BASE"};
 const video=document.getElementById("video"), work=document.getElementById("work"),
 overlay=document.getElementById("overlay"), statusEl=document.getElementById("status"),
-facesEl=document.getElementById("faces"), start=document.getElementById("start");
+facesEl=document.getElementById("faces"), start=document.getElementById("start"),
+planetLabel=document.getElementById("planetLabel");
 let ready=false, busy=false, cvReady=false, cv=null;
 let templates=[], lastPose=null, lastPoseAt=0, smoothedPose=null;
 let lastMultiPose=null, lastMultiPoseAt=0, lastDrawState=null, lastMultiDrawState=null;
 let strongAnchorUntil=0;
+let threeReady=false, renderer3d=null, scene3d=null, cam3d=null, anchor3d=null,
+earthMesh=null, atmosphereMesh=null, moonPivot=null, moonMesh=null, sunPivot=null, sunLight=null;
 
 const FALLBACK_MS=320;
 const POS_ALPHA_MULTI=.42, POS_ALPHA_SINGLE=.18;
@@ -70,8 +76,102 @@ const DEDUPE_DIST=32;
 function fit(){
  overlay.width=innerWidth*devicePixelRatio;overlay.height=innerHeight*devicePixelRatio;
  overlay.style.width=innerWidth+"px";overlay.style.height=innerHeight+"px";
+ if(renderer3d && cam3d){
+   renderer3d.setPixelRatio(devicePixelRatio);
+   renderer3d.setSize(innerWidth,innerHeight,false);
+   cam3d.left=-innerWidth/2; cam3d.right=innerWidth/2;
+   cam3d.top=innerHeight/2; cam3d.bottom=-innerHeight/2;
+   cam3d.updateProjectionMatrix();
+ }
 }
 addEventListener("resize",fit); fit();
+
+function initThree(){
+ if(threeReady) return true;
+ if(!window.THREE) throw new Error("Three.js não carregou.");
+
+ renderer3d=new THREE.WebGLRenderer({
+   canvas:overlay,
+   alpha:true,
+   antialias:true,
+   powerPreference:"high-performance",
+   premultipliedAlpha:true
+ });
+ renderer3d.setPixelRatio(devicePixelRatio);
+ renderer3d.setSize(innerWidth,innerHeight,false);
+ renderer3d.setClearColor(0x000000,0);
+
+ scene3d=new THREE.Scene();
+ cam3d=new THREE.OrthographicCamera(-innerWidth/2,innerWidth/2,innerHeight/2,-innerHeight/2,0.1,5000);
+ cam3d.position.z=1400;
+
+ const hemi=new THREE.HemisphereLight(0x9dd7ff,0x07111b,1.35);
+ scene3d.add(hemi);
+
+ anchor3d=new THREE.Group();
+ anchor3d.visible=false;
+ scene3d.add(anchor3d);
+
+ const texImg=document.getElementById("earthTexture");
+ const earthTex=new THREE.Texture(texImg);
+ earthTex.needsUpdate=true;
+ earthTex.colorSpace=THREE.SRGBColorSpace;
+
+ const earthGeo=new THREE.SphereGeometry(1,56,56);
+ const earthMat=new THREE.MeshStandardMaterial({
+   map:earthTex,
+   roughness:.95,
+   metalness:0,
+   color:0xffffff
+ });
+ earthMesh=new THREE.Mesh(earthGeo,earthMat);
+ earthMesh.rotation.z=0.35;
+ anchor3d.add(earthMesh);
+
+ atmosphereMesh=new THREE.Mesh(
+   new THREE.SphereGeometry(1.06,40,40),
+   new THREE.MeshBasicMaterial({
+     color:0x6fd3ff,
+     transparent:true,
+     opacity:.18,
+     blending:THREE.AdditiveBlending,
+     side:THREE.BackSide
+   })
+ );
+ anchor3d.add(atmosphereMesh);
+
+ const moonGeo=new THREE.SphereGeometry(.22,28,28);
+ const moonMat=new THREE.MeshStandardMaterial({color:0xd7dbe2, roughness:1, metalness:0});
+ moonPivot=new THREE.Group();
+ moonMesh=new THREE.Mesh(moonGeo,moonMat);
+ moonMesh.position.set(1.9,.22,.18);
+ moonPivot.add(moonMesh);
+ anchor3d.add(moonPivot);
+
+ sunPivot=new THREE.Group();
+ sunPivot.position.set(3.05,-1.35,-1.1);
+ const sunCore=new THREE.Mesh(
+   new THREE.SphereGeometry(.38,28,28),
+   new THREE.MeshBasicMaterial({color:0xffd46b, transparent:true, opacity:.96})
+ );
+ const sunGlow=new THREE.Mesh(
+   new THREE.SphereGeometry(.62,28,28),
+   new THREE.MeshBasicMaterial({
+     color:0xffb247, transparent:true, opacity:.26,
+     blending:THREE.AdditiveBlending
+   })
+ );
+ sunPivot.add(sunGlow);
+ sunPivot.add(sunCore);
+ anchor3d.add(sunPivot);
+
+ sunLight=new THREE.PointLight(0xffefbc,3.4,0,2);
+ sunLight.position.copy(sunPivot.position);
+ anchor3d.add(sunLight);
+
+ threeReady=true;
+ return true;
+}
 
 async function waitForCV(){
  if(cvReady && cv) return true;
@@ -154,7 +254,7 @@ async function initDetector(){
      src.delete(); gray.delete(); bw.delete(); small.delete();
    }
    ready=true;
-   statusEl.textContent="Detector CEEJA Cube pronto ✓";
+   statusEl.textContent="Detector pronto ✓ • Terra 3D preparada";
    return true;
  }catch(e){
    ready=false;
@@ -182,6 +282,9 @@ start.onclick=async()=>{
   // 2) Só agora carrega/prepara o detector.
   if(!ready){
     await initDetector();
+  }
+  if(!threeReady){
+    initThree();
   }
 
   if(ready){
@@ -458,29 +561,31 @@ function project3(P,pose){
 function render(ds){
  const last=ds.filter(d=>d.id>=0&&d.id<=5);
  if(!last.length){facesEl.innerHTML='<span class="muted">Nenhuma face detectada.</span>'; return;}
- facesEl.innerHTML=last.length>=2 ? '<span class="ok">🌍 Rastreamento multiface</span><br><span class="muted">'+last.map(d=>N[d.id]).join(' + ')+'</span>' : '<span class="ok">🌍 Transição por 1 face</span><br><span class="muted">'+last.map(d=>N[d.id]).join(' + ')+'</span>';
+ facesEl.innerHTML=last.length>=2 ? '<span class="ok">🌍 Terra 3D • rastreamento multiface</span><br><span class="muted">'+last.map(d=>N[d.id]).join(' + ')+'</span>' : '<span class="ok">🌍 Terra 3D • transição por 1 face</span><br><span class="muted">'+last.map(d=>N[d.id]).join(' + ')+'</span>';
 }
 function drawEarth(ds,sw,sh,pose){
- const ctx=overlay.getContext('2d');
- ctx.clearRect(0,0,overlay.width,overlay.height);
+ if(!threeReady) return;
 
  if(!pose){
+   anchor3d.visible=false;
+   planetLabel.style.display='none';
+   renderer3d.clear();
+   renderer3d.render(scene3d,cam3d);
    lastDrawState=null;
    return;
  }
 
  const vw=innerWidth,vh=innerHeight,scale=Math.max(vw/sw,vh/sh);
- const ox=(vw-sw*scale)/2, oy=(vh-sh*scale)/2, dp=devicePixelRatio;
+ const ox=(vw-sw*scale)/2, oy=(vh-sh*scale)/2;
  const S=p=>[ox+p[0]*scale, oy+p[1]*scale];
  const C3=[0,0,0], RADIUS=EARTH_RADIUS;
 
  const cp=project3(C3,pose), xp=project3([RADIUS,0,0],pose), yp=project3([0,RADIUS,0],pose);
- if(!cp||!xp||!yp)return;
+ if(!cp||!xp||!yp) return;
 
  let C=S(cp), X=S(xp), Y=S(yp);
  let rad=(Math.hypot(X[0]-C[0],X[1]-C[1])+Math.hypot(Y[0]-C[0],Y[1]-C[1]))/2;
 
- // Rejeita tamanhos fisicamente absurdos antes de desenhar.
  const maxViewportRad=Math.min(vw,vh)*(pose.single?MAX_SINGLE_RADIUS_VIEWPORT:MAX_MULTI_RADIUS_VIEWPORT);
  if(!Number.isFinite(rad) || rad<8 || rad>maxViewportRad){
    if(lastDrawState){
@@ -493,7 +598,6 @@ function drawEarth(ds,sw,sh,pose){
 
  const now=performance.now();
 
- // Multiface vira uma "régua" confiável de escala.
  if(!pose.single){
    if(lastDrawState){
      rad=lastDrawState.rad + (rad-lastDrawState.rad)*MULTI_SCREEN_RADIUS_BLEND;
@@ -504,7 +608,6 @@ function drawEarth(ds,sw,sh,pose){
    }
    lastMultiDrawState={cx:C[0],cy:C[1],rad,at:now};
  }else{
-   // Com uma face só, trava a escala perto da última escala multiface.
    if(lastMultiDrawState && (now-lastMultiDrawState.at)<=MULTI_ANCHOR_MS){
      const minR=lastMultiDrawState.rad*SINGLE_RADIUS_FROM_MULTI_MIN;
      const maxR=lastMultiDrawState.rad*SINGLE_RADIUS_FROM_MULTI_MAX;
@@ -514,7 +617,6 @@ function drawEarth(ds,sw,sh,pose){
      const maxR=lastDrawState.rad*(1+SINGLE_SCREEN_RADIUS_STEP);
      rad=clamp(rad,minR,maxR);
    }
-
    if(lastDrawState){
      C=[
        lastDrawState.cx + (C[0]-lastDrawState.cx)*SINGLE_SCREEN_CENTER_BLEND,
@@ -525,48 +627,27 @@ function drawEarth(ds,sw,sh,pose){
 
  lastDrawState={cx:C[0],cy:C[1],rad,single:pose.single,at:now};
 
- ctx.save();
- ctx.scale(dp,dp);
- ctx.shadowColor='rgba(70,190,255,.72)';
- ctx.shadowBlur=20;
- ctx.fillStyle='#0a4c88';
- ctx.beginPath();
- ctx.arc(C[0],C[1],rad,0,Math.PI*2);
- ctx.fill();
- ctx.shadowBlur=0;
+ anchor3d.visible=true;
+ anchor3d.position.set(C[0]-vw/2, vh/2-C[1], 0);
+ anchor3d.scale.set(rad,rad,rad);
 
- const tex=document.getElementById('earthTexture');
- ctx.save();
- ctx.beginPath();
- ctx.arc(C[0],C[1],rad*.985,0,Math.PI*2);
- ctx.clip();
+ // Dá um leve vínculo visual ao ângulo do cubo projetado.
+ const screenAngle=Math.atan2(Y[1]-C[1],Y[0]-C[0]);
+ anchor3d.rotation.set(.22, -.18, screenAngle*.18);
 
- if(tex && tex.complete && tex.naturalWidth){
-   const tw=tex.naturalWidth, th=tex.naturalHeight, spin=((performance.now()/28000)%1), sx=spin*tw, d=rad*2;
-   ctx.drawImage(tex,sx,0,tw-sx,th,C[0]-rad,C[1]-rad,d*(tw-sx)/tw,d);
-   if(sx>0) ctx.drawImage(tex,0,0,sx,th,C[0]-rad+d*(tw-sx)/tw,C[1]-rad,d*sx/tw,d);
- } else {
-   const g=ctx.createRadialGradient(C[0]-rad*.3,C[1]-rad*.3,rad*.1,C[0],C[1],rad);
-   g.addColorStop(0,'#4da7dd');
-   g.addColorStop(1,'#062d5b');
-   ctx.fillStyle=g;
-   ctx.fillRect(C[0]-rad,C[1]-rad,rad*2,rad*2);
- }
+ const t=performance.now()*0.001;
+ earthMesh.rotation.y=t*.28;
+ atmosphereMesh.rotation.y=t*.22;
+ moonPivot.rotation.z=t*.72;
+ moonPivot.rotation.y=t*.36;
+ sunPivot.rotation.z=-t*.08;
 
- const shade=ctx.createRadialGradient(C[0]-rad*.34,C[1]-rad*.30,rad*.12,C[0]+rad*.20,C[1]+rad*.12,rad*1.05);
- shade.addColorStop(0,'rgba(255,255,255,.20)');
- shade.addColorStop(.55,'rgba(255,255,255,0)');
- shade.addColorStop(1,'rgba(0,12,32,.48)');
- ctx.fillStyle=shade;
- ctx.fillRect(C[0]-rad,C[1]-rad,rad*2,rad*2);
- ctx.restore();
+ renderer3d.clear();
+ renderer3d.render(scene3d,cam3d);
 
- ctx.strokeStyle='rgba(174,232,255,.90)';
- ctx.lineWidth=2.5;
- ctx.beginPath();
- ctx.arc(C[0],C[1],rad,0,Math.PI*2);
- ctx.stroke();
- ctx.restore();
+ planetLabel.style.display='block';
+ planetLabel.style.left=Math.max(12,Math.min(vw-120,C[0]-rad*.75))+'px';
+ planetLabel.style.top=Math.max(12,Math.min(vh-46,C[1]+rad*1.02))+'px';
 }
 async function loop(){
  if(video.readyState>=2 && ready && !busy){
@@ -582,7 +663,7 @@ async function loop(){
     const now=performance.now(); let pose=null;
     if(rawPose){ pose=smoothPose(rawPose); lastPose=pose; lastPoseAt=now; }
     else if(lastPose && (now-lastPoseAt)<=FALLBACK_MS){ pose=lastPose; }
-    else if(!ds.length){ smoothedPose=null; lastDrawState=null; lastMultiDrawState=null; lastMultiPose=null; }
+    else if(!ds.length){ smoothedPose=null; lastDrawState=null; lastMultiDrawState=null; lastMultiPose=null; anchor3d && (anchor3d.visible=false); planetLabel.style.display='none'; }
     drawEarth(ds,W,H,pose);
     if(rawPose){
       statusEl.textContent=(rawPose.single?'Âncora suave • 1 face':'Âncora forte ✓ • '+rawPose.faces.map(id=>N[id]).join(' + '))+' • erro '+rawPose.reproj.toFixed(1)+'px';
