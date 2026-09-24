@@ -1,26 +1,2 @@
-CEEJA Cube — Terra Realista v2.2
 
-Esta versão usa detector customizado para as 6 faces do cubo que já foi montado com os marcadores antigos.
-Arquivos das faces usados pelo detector ficam na pasta /markers.
-
-Hospedagem:
-- GitHub Pages: publicar a branch main com / (root)
-- Netlify: pode publicar a pasta inteira normalmente.
-
-Correção v2.2: carregamento do OpenCV trocado por build único via jsDelivr, com diagnóstico de timeout.
-
-Nesta variante, os 6 arquivos PNG dos marcadores ficam soltos na raiz do repositório, ao lado do index.html.
-
-Correção v2.3: o OpenCV/detector só é inicializado depois que a usuária toca em ABRIR CÂMERA.
-
-Correção v2.4: removido o carregador antigo do OpenCV. Agora o motor é importado sob demanda com @opencvjs/web apenas depois de abrir a câmera.
-
-Correção v2.5: detector mais tolerante a inclinação, sombra e foco; usa Otsu + threshold adaptativo, RETR_LIST, comparação em 32×32, resolução de análise 560 px e fallback aumentado para 500 ms.
-
-Correção v2.6: profundidade e escala estabilizadas quando há apenas 1 face. Usa a última pose multiface como âncora de Z/X/Y, reduz saltos de raio/centro na tela e mantém fallback anterior.
-
-Correção v2.7: Terra reduzida para 10 cm de diâmetro virtual, janela de âncora forte após detecção multiface, menor variação de escala e centro na tela, e fallback ampliado para 650 ms.
-
-Correção v2.8: impede a Terra de ficar “grudada” ou inflar quando o cubo sai da câmera. Fallback reduzido para 320 ms, limpeza de âncoras ao perder o cubo, limite máximo de raio e escala de 1 face travada em ±10% da última escala multiface.
-
-Versão v3.0: substitui a Terra 2D por uma cena 3D com Three.js. A esfera da Terra tem textura real, halo atmosférico, Lua em órbita, sol emissivo/luz e selo EARTH • 3D, todos ancorados ao centro do cubo.
+Versão v3.2: muda a ancoragem para pose 3D real com câmera em perspectiva (Three.js PerspectiveCamera + setViewOffset). A Terra deixa de usar centro/raio em tela e passa a seguir posição e rotação 6DoF do cubo, com animação desacoplada do detector.

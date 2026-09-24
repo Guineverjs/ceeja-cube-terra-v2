@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>CEEJA Cube — Terra 3D v3.0</title>
+<title>CEEJA Cube — Terra 3D v3.2</title>
 <style>
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070a;font-family:Arial,sans-serif;color:white}
 #video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover;background:#000}
@@ -19,7 +19,7 @@
 <body>
 <video id="video" autoplay muted playsinline></video>
 <canvas id="overlay"></canvas>
-<div id="top"><div id="title">🌍 CEEJA Cube — Terra 3D v3.0</div>
+<div id="top"><div id="title">🌍 CEEJA Cube — Terra 3D v3.2</div>
 <div id="status">Pronto para iniciar.</div><button id="start">ABRIR CÂMERA</button></div>
 <div id="faces"><span class="muted">Nenhuma face detectada ainda.</span></div>
 <div id="planetLabel">EARTH • 3D</div>
@@ -45,7 +45,9 @@ let templates=[], lastPose=null, lastPoseAt=0, smoothedPose=null;
 let lastMultiPose=null, lastMultiPoseAt=0, lastDrawState=null, lastMultiDrawState=null;
 let strongAnchorUntil=0;
 let threeReady=false, renderer3d=null, scene3d=null, cam3d=null, anchor3d=null,
-earthMesh=null, atmosphereMesh=null, moonPivot=null, moonMesh=null, sunPivot=null, sunLight=null;
+content3d=null, earthMesh=null, atmosphereMesh=null, moonPivot=null, moonMesh=null, sunPivot=null, sunLight=null;
+let targetPose3d=null, currentPose3d=null, loopsStarted=false;
+let srcW=560, srcH=315;
 
 const FALLBACK_MS=320;
 const POS_ALPHA_MULTI=.42, POS_ALPHA_SINGLE=.18;
@@ -66,25 +68,38 @@ const MAX_SINGLE_RADIUS_VIEWPORT=.42;
 const MAX_MULTI_RADIUS_VIEWPORT=.48;
 const HALF=.022;          // cube: 44 mm
 const TAG_HALF=.01585;    // marker black square: 31.7 mm / 2
-const EARTH_RADIUS=.050;  // 12 cm diameter virtual Earth
+const EARTH_RADIUS=.040;  // 8 cm diameter virtual Earth, close to Merge Cube feel
 const TEMPLATE_SIZE=32;
 const MIN_MATCH=0.67;
 const MIN_AREA=850;
 const MAX_AREA_FRAC=.34;
 const DEDUPE_DIST=32;
+const DETECT_INTERVAL_MS=55;
+const TARGET_LERP_MULTI=.24, TARGET_LERP_SINGLE=.12;
+const ROT_LERP_MULTI=.24, ROT_LERP_SINGLE=.12;
 
 function fit(){
  overlay.width=innerWidth*devicePixelRatio;overlay.height=innerHeight*devicePixelRatio;
  overlay.style.width=innerWidth+"px";overlay.style.height=innerHeight+"px";
- if(renderer3d && cam3d){
-   renderer3d.setPixelRatio(devicePixelRatio);
-   renderer3d.setSize(innerWidth,innerHeight,false);
-   cam3d.left=-innerWidth/2; cam3d.right=innerWidth/2;
-   cam3d.top=innerHeight/2; cam3d.bottom=-innerHeight/2;
-   cam3d.updateProjectionMatrix();
- }
+ if(renderer3d){ renderer3d.setPixelRatio(devicePixelRatio); renderer3d.setSize(innerWidth,innerHeight,false); }
+ updateCameraIntrinsics();
 }
 addEventListener("resize",fit); fit();
+
+function updateCameraIntrinsics(){
+ if(!cam3d) return;
+ const vw=innerWidth, vh=innerHeight;
+ const fovDeg=45;
+ cam3d.fov=fovDeg;
+ cam3d.aspect=srcW/srcH;
+ cam3d.near=.01; cam3d.far=20;
+ cam3d.clearViewOffset();
+ const s=Math.max(vw/srcW, vh/srcH);
+ const visW=vw/s, visH=vh/s;
+ const offX=(srcW-visW)/2, offY=(srcH-visH)/2;
+ cam3d.setViewOffset(srcW,srcH,offX,offY,visW,visH);
+ cam3d.updateProjectionMatrix();
+}
 
 function initThree(){
  if(threeReady) return true;
@@ -102,72 +117,75 @@ function initThree(){
  renderer3d.setClearColor(0x000000,0);
 
  scene3d=new THREE.Scene();
- cam3d=new THREE.OrthographicCamera(-innerWidth/2,innerWidth/2,innerHeight/2,-innerHeight/2,0.1,5000);
- cam3d.position.z=1400;
+ cam3d=new THREE.PerspectiveCamera(45,innerWidth/innerHeight,.01,20);
+ cam3d.position.set(0,0,0);
+ updateCameraIntrinsics();
 
- const hemi=new THREE.HemisphereLight(0x9dd7ff,0x07111b,1.35);
- scene3d.add(hemi);
+ const amb=new THREE.AmbientLight(0xd8eeff,1.65);
+ scene3d.add(amb);
+ const dir=new THREE.DirectionalLight(0xffffff,1.65);
+ dir.position.set(.8,.3,.5);
+ scene3d.add(dir);
 
  anchor3d=new THREE.Group();
  anchor3d.visible=false;
  scene3d.add(anchor3d);
 
+ content3d=new THREE.Group();
+ content3d.scale.set(EARTH_RADIUS,EARTH_RADIUS,EARTH_RADIUS);
+ anchor3d.add(content3d);
+
  const texImg=document.getElementById("earthTexture");
  const earthTex=new THREE.Texture(texImg);
  earthTex.needsUpdate=true;
- earthTex.colorSpace=THREE.SRGBColorSpace;
+ if(THREE.SRGBColorSpace) earthTex.colorSpace=THREE.SRGBColorSpace;
 
- const earthGeo=new THREE.SphereGeometry(1,56,56);
+ const earthGeo=new THREE.SphereGeometry(1,64,64);
  const earthMat=new THREE.MeshStandardMaterial({
    map:earthTex,
-   roughness:.95,
+   roughness:.92,
    metalness:0,
-   color:0xffffff
+   color:0xffffff,
+   emissive:0x1a2638,
+   emissiveIntensity:.45
  });
  earthMesh=new THREE.Mesh(earthGeo,earthMat);
- earthMesh.rotation.z=0.35;
- anchor3d.add(earthMesh);
+ content3d.add(earthMesh);
 
  atmosphereMesh=new THREE.Mesh(
-   new THREE.SphereGeometry(1.06,40,40),
+   new THREE.SphereGeometry(1.045,48,48),
    new THREE.MeshBasicMaterial({
-     color:0x6fd3ff,
-     transparent:true,
-     opacity:.18,
-     blending:THREE.AdditiveBlending,
-     side:THREE.BackSide
+     color:0x71d5ff, transparent:true, opacity:.16,
+     blending:THREE.AdditiveBlending, side:THREE.BackSide
    })
  );
- anchor3d.add(atmosphereMesh);
+ content3d.add(atmosphereMesh);
 
- const moonGeo=new THREE.SphereGeometry(.22,28,28);
- const moonMat=new THREE.MeshStandardMaterial({color:0xd7dbe2, roughness:1, metalness:0});
  moonPivot=new THREE.Group();
- moonMesh=new THREE.Mesh(moonGeo,moonMat);
- moonMesh.position.set(1.9,.22,.18);
+ moonMesh=new THREE.Mesh(
+   new THREE.SphereGeometry(.12,24,24),
+   new THREE.MeshStandardMaterial({color:0xd7dbe2, roughness:1, metalness:0})
+ );
+ moonMesh.position.set(1.38,.08,.12);
  moonPivot.add(moonMesh);
- anchor3d.add(moonPivot);
+ content3d.add(moonPivot);
 
  sunPivot=new THREE.Group();
- sunPivot.position.set(3.05,-1.35,-1.1);
+ sunPivot.position.set(2.0,-.85,-.7);
  const sunCore=new THREE.Mesh(
-   new THREE.SphereGeometry(.38,28,28),
-   new THREE.MeshBasicMaterial({color:0xffd46b, transparent:true, opacity:.96})
+   new THREE.SphereGeometry(.22,24,24),
+   new THREE.MeshBasicMaterial({color:0xffd46b, transparent:true, opacity:.98})
  );
  const sunGlow=new THREE.Mesh(
-   new THREE.SphereGeometry(.62,28,28),
-   new THREE.MeshBasicMaterial({
-     color:0xffb247, transparent:true, opacity:.26,
-     blending:THREE.AdditiveBlending
-   })
+   new THREE.SphereGeometry(.42,24,24),
+   new THREE.MeshBasicMaterial({color:0xffb247, transparent:true, opacity:.22, blending:THREE.AdditiveBlending})
  );
- sunPivot.add(sunGlow);
- sunPivot.add(sunCore);
- anchor3d.add(sunPivot);
+ sunPivot.add(sunGlow); sunPivot.add(sunCore);
+ content3d.add(sunPivot);
 
- sunLight=new THREE.PointLight(0xffefbc,3.4,0,2);
+ sunLight=new THREE.PointLight(0xffefbc,2.2,0,2);
  sunLight.position.copy(sunPivot.position);
- anchor3d.add(sunLight);
+ content3d.add(sunLight);
 
  threeReady=true;
  return true;
@@ -290,7 +308,11 @@ start.onclick=async()=>{
   if(ready){
     statusEl.textContent="Detector pronto ✓ • procurando o cubo…";
   }
-  requestAnimationFrame(loop);
+  if(!loopsStarted){
+    loopsStarted=true;
+    requestAnimationFrame(renderLoop);
+    requestAnimationFrame(loop);
+  }
  }catch(e){
   start.disabled=false;
   start.textContent="ABRIR CÂMERA";
@@ -558,6 +580,22 @@ function project3(P,pose){
  const X=R[0]*x+R[1]*y+R[2]*z+t[0], Y=R[3]*x+R[4]*y+R[5]*z+t[1], Z=R[6]*x+R[7]*y+R[8]*z+t[2];
  if(Z<=.001) return null; return [pose.fx*X/Z+pose.cx, pose.fy*Y/Z+pose.cy];
 }
+function poseToThree(pose){
+ const R=pose.R;
+ const m=new THREE.Matrix4();
+ m.set(
+   R[0], -R[1], -R[2], 0,
+   -R[3], R[4], R[5], 0,
+   -R[6], R[7], R[8], 0,
+   0,0,0,1
+ );
+ const q=new THREE.Quaternion().setFromRotationMatrix(m);
+ const pos=new THREE.Vector3(pose.t[0], -pose.t[1], -pose.t[2]);
+ return {pos, quat:q, single:!!pose.single, faces:pose.faces||[]};
+}
+function copyPoseState(st){
+ return {pos:st.pos.clone(), quat:st.quat.clone(), single:st.single, faces:[...(st.faces||[])]};
+}
 function render(ds){
  const last=ds.filter(d=>d.id>=0&&d.id<=5);
  if(!last.length){facesEl.innerHTML='<span class="muted">Nenhuma face detectada.</span>'; return;}
@@ -565,112 +603,78 @@ function render(ds){
 }
 function drawEarth(ds,sw,sh,pose){
  if(!threeReady) return;
-
  if(!pose){
-   anchor3d.visible=false;
-   planetLabel.style.display='none';
-   renderer3d.clear();
-   renderer3d.render(scene3d,cam3d);
-   lastDrawState=null;
+   targetPose3d=null;
    return;
  }
-
- const vw=innerWidth,vh=innerHeight,scale=Math.max(vw/sw,vh/sh);
- const ox=(vw-sw*scale)/2, oy=(vh-sh*scale)/2;
- const S=p=>[ox+p[0]*scale, oy+p[1]*scale];
- const C3=[0,0,0], RADIUS=EARTH_RADIUS;
-
- const cp=project3(C3,pose), xp=project3([RADIUS,0,0],pose), yp=project3([0,RADIUS,0],pose);
- if(!cp||!xp||!yp) return;
-
- let C=S(cp), X=S(xp), Y=S(yp);
- let rad=(Math.hypot(X[0]-C[0],X[1]-C[1])+Math.hypot(Y[0]-C[0],Y[1]-C[1]))/2;
-
- const maxViewportRad=Math.min(vw,vh)*(pose.single?MAX_SINGLE_RADIUS_VIEWPORT:MAX_MULTI_RADIUS_VIEWPORT);
- if(!Number.isFinite(rad) || rad<8 || rad>maxViewportRad){
-   if(lastDrawState){
-     C=[lastDrawState.cx,lastDrawState.cy];
-     rad=lastDrawState.rad;
-   }else{
-     return;
-   }
- }
-
- const now=performance.now();
-
- if(!pose.single){
-   if(lastDrawState){
-     rad=lastDrawState.rad + (rad-lastDrawState.rad)*MULTI_SCREEN_RADIUS_BLEND;
-     C=[
-       lastDrawState.cx + (C[0]-lastDrawState.cx)*MULTI_SCREEN_CENTER_BLEND,
-       lastDrawState.cy + (C[1]-lastDrawState.cy)*MULTI_SCREEN_CENTER_BLEND
-     ];
-   }
-   lastMultiDrawState={cx:C[0],cy:C[1],rad,at:now};
- }else{
-   if(lastMultiDrawState && (now-lastMultiDrawState.at)<=MULTI_ANCHOR_MS){
-     const minR=lastMultiDrawState.rad*SINGLE_RADIUS_FROM_MULTI_MIN;
-     const maxR=lastMultiDrawState.rad*SINGLE_RADIUS_FROM_MULTI_MAX;
-     rad=clamp(rad,minR,maxR);
-   }else if(lastDrawState){
-     const minR=lastDrawState.rad*(1-SINGLE_SCREEN_RADIUS_STEP);
-     const maxR=lastDrawState.rad*(1+SINGLE_SCREEN_RADIUS_STEP);
-     rad=clamp(rad,minR,maxR);
-   }
-   if(lastDrawState){
-     C=[
-       lastDrawState.cx + (C[0]-lastDrawState.cx)*SINGLE_SCREEN_CENTER_BLEND,
-       lastDrawState.cy + (C[1]-lastDrawState.cy)*SINGLE_SCREEN_CENTER_BLEND
-     ];
-   }
- }
-
- lastDrawState={cx:C[0],cy:C[1],rad,single:pose.single,at:now};
-
- anchor3d.visible=true;
- anchor3d.position.set(C[0]-vw/2, vh/2-C[1], 0);
- anchor3d.scale.set(rad,rad,rad);
-
- // Dá um leve vínculo visual ao ângulo do cubo projetado.
- const screenAngle=Math.atan2(Y[1]-C[1],Y[0]-C[0]);
- anchor3d.rotation.set(.22, -.18, screenAngle*.18);
-
- const t=performance.now()*0.001;
- earthMesh.rotation.y=t*.28;
- atmosphereMesh.rotation.y=t*.22;
- moonPivot.rotation.z=t*.72;
- moonPivot.rotation.y=t*.36;
- sunPivot.rotation.z=-t*.08;
-
- renderer3d.clear();
- renderer3d.render(scene3d,cam3d);
-
- planetLabel.style.display='block';
- planetLabel.style.left=Math.max(12,Math.min(vw-120,C[0]-rad*.75))+'px';
- planetLabel.style.top=Math.max(12,Math.min(vh-46,C[1]+rad*1.02))+'px';
+ srcW=sw; srcH=sh;
+ updateCameraIntrinsics();
+ targetPose3d=poseToThree(pose);
 }
-async function loop(){
- if(video.readyState>=2 && ready && !busy){
-  busy=true;
+
+function renderLoop(){
+ if(threeReady){
+   const t=performance.now()*0.001;
+   earthMesh.rotation.y=t*.24;
+   atmosphereMesh.rotation.y=t*.18;
+   moonPivot.rotation.z=t*.34;
+   moonPivot.rotation.y=t*.16;
+   sunPivot.rotation.z=-t*.04;
+
+   if(targetPose3d){
+     if(!currentPose3d) currentPose3d=copyPoseState(targetPose3d);
+     const pl=targetPose3d.single?TARGET_LERP_SINGLE:TARGET_LERP_MULTI;
+     const rl=targetPose3d.single?ROT_LERP_SINGLE:ROT_LERP_MULTI;
+     currentPose3d.pos.lerp(targetPose3d.pos,pl);
+     currentPose3d.quat.slerp(targetPose3d.quat,rl);
+     currentPose3d.single=targetPose3d.single;
+     currentPose3d.faces=[...(targetPose3d.faces||[])];
+
+     anchor3d.visible=true;
+     anchor3d.position.copy(currentPose3d.pos);
+     anchor3d.quaternion.copy(currentPose3d.quat);
+
+     planetLabel.style.display='block';
+     const P=new THREE.Vector3();
+     anchor3d.getWorldPosition(P);
+     P.project(cam3d);
+     const sx=(P.x*.5+.5)*innerWidth, sy=(-P.y*.5+.5)*innerHeight;
+     planetLabel.style.left=Math.max(12,Math.min(innerWidth-120,sx-40))+'px';
+     planetLabel.style.top=Math.max(12,Math.min(innerHeight-46,sy+58))+'px';
+   }else{
+     anchor3d.visible=false;
+     currentPose3d=null;
+     planetLabel.style.display='none';
+   }
+
+   renderer3d.clear();
+   renderer3d.render(scene3d,cam3d);
+ }
+ requestAnimationFrame(renderLoop);
+}
+
+async function loop(now){
+ if(video.readyState>=2 && ready && !busy && (!loop.last || now-loop.last>=DETECT_INTERVAL_MS)){
+  loop.last=now; busy=true;
   const W=560, H=Math.max(315,Math.round(W*video.videoHeight/video.videoWidth));
-  work.width=W; work.height=H;
+  work.width=W; work.height=H; srcW=W; srcH=H;
   const c=work.getContext('2d',{willReadFrequently:true}); c.drawImage(video,0,0,W,H);
   const imgData=c.getImageData(0,0,W,H);
   try{
     const ds=detectCustom(imgData,W,H);
     render(ds);
     const rawPose=ds.length?await solveBundle(ds,W,H):null;
-    const now=performance.now(); let pose=null;
-    if(rawPose){ pose=smoothPose(rawPose); lastPose=pose; lastPoseAt=now; }
-    else if(lastPose && (now-lastPoseAt)<=FALLBACK_MS){ pose=lastPose; }
-    else if(!ds.length){ smoothedPose=null; lastDrawState=null; lastMultiDrawState=null; lastMultiPose=null; anchor3d && (anchor3d.visible=false); planetLabel.style.display='none'; }
+    const now2=performance.now(); let pose=null;
+    if(rawPose){ pose=smoothPose(rawPose); lastPose=pose; lastPoseAt=now2; }
+    else if(lastPose && (now2-lastPoseAt)<=FALLBACK_MS){ pose=lastPose; }
+    else if(!ds.length){ smoothedPose=null; lastDrawState=null; lastMultiDrawState=null; lastMultiPose=null; targetPose3d=null; }
     drawEarth(ds,W,H,pose);
     if(rawPose){
-      statusEl.textContent=(rawPose.single?'Âncora suave • 1 face':'Âncora forte ✓ • '+rawPose.faces.map(id=>N[id]).join(' + '))+' • erro '+rawPose.reproj.toFixed(1)+'px';
+      statusEl.textContent=(rawPose.single?'Âncora 3D suave • 1 face':'Âncora 3D forte ✓ • '+rawPose.faces.map(id=>N[id]).join(' + '))+' • erro '+rawPose.reproj.toFixed(1)+'px';
     }else if(pose){
       statusEl.textContent='Ponte curta de rastreamento…';
     }else{
-      statusEl.textContent=ds.length?'Face reconhecida • ajustando pose…':'Câmera aberta • procurando o cubo…';
+      statusEl.textContent=ds.length?'Face reconhecida • ajustando pose 3D…':'Câmera aberta • procurando o cubo…';
     }
   }catch(e){ console.error(e); statusEl.textContent='Detector: '+e.message; }
   busy=false;
