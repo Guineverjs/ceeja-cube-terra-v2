@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>CEEJA Cube — Tracker 2.0 • AutoCal v4.1</title>
+<title>CEEJA Cube — Tracker 2.0 • AutoCal Multi-View v4.2</title>
 <style>
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070a;font-family:Arial,sans-serif;color:white}
 #video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover;background:#000}
@@ -21,7 +21,7 @@
 <body>
 <video id="video" autoplay muted playsinline></video>
 <canvas id="overlay"></canvas>
-<div id="top"><div id="title">🌍 CEEJA Cube — Tracker 2.0 • AutoCal v4.1</div>
+<div id="top"><div id="title">🌍 CEEJA Cube — Tracker 2.0 • AutoCal Multi-View v4.2</div>
 <div id="status">Pronto para iniciar.</div><button id="start">ABRIR CÂMERA</button></div>
 <div id="faces"><span class="muted">Nenhuma face detectada ainda.</span></div>
 <div id="planetLabel">EARTH • 3D</div>
@@ -52,9 +52,9 @@ let threeReady=false, renderer3d=null, scene3d=null, cam3d=null, anchor3d=null,
 content3d=null, earthMesh=null, atmosphereMesh=null, moonPivot=null, moonMesh=null, sunPivot=null, sunLight=null;
 let targetPose3d=null, currentPose3d=null, loopsStarted=false;
 let srcW=560, srcH=315;
-let cameraFovDeg=45, calibSamples=[], calibBusy=false, calibComplete=false, lastCalibSampleAt=0;
+let cameraFovDeg=45, cameraCalib=null, calibSamples=[], calibBusy=false, calibComplete=false, lastCalibSampleAt=0;
 let calibFaceCombos=new Set(), calibScaleBuckets=new Set();
-const CALIB_KEY="CEEJA_CUBE_CAMERA_FOV_V1";
+const CALIB_KEY="CEEJA_CUBE_CAMERA_MULTIVIEW_V2";
 
 const FALLBACK_MS=320;
 const POS_ALPHA_MULTI=.42, POS_ALPHA_SINGLE=.18;
@@ -84,7 +84,7 @@ const DEDUPE_DIST=32;
 const DETECT_INTERVAL_MS=55;
 const TARGET_LERP_MULTI=.20, TARGET_LERP_SINGLE=.10;
 const ROT_LERP_MULTI=.20, ROT_LERP_SINGLE=.10;
-const CALIB_MIN_SAMPLES=8, CALIB_TARGET_SAMPLES=12, CALIB_SAMPLE_GAP_MS=500;
+const CALIB_MIN_SAMPLES=10, CALIB_TARGET_SAMPLES=14, CALIB_SAMPLE_GAP_MS=520;
 
 function fit(){
  overlay.width=innerWidth*devicePixelRatio;overlay.height=innerHeight*devicePixelRatio;
@@ -261,8 +261,63 @@ function centerOf(c){return {x:(c[0].x+c[1].x+c[2].x+c[3].x)/4,y:(c[0].y+c[1].y+
 function dist(a,b){const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy)}
 function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
 
-function loadSavedCalibration(){try{const raw=localStorage.getItem(CALIB_KEY);if(!raw)return false;const v=JSON.parse(raw);if(v&&Number.isFinite(v.fov)&&v.fov>=30&&v.fov<=85){cameraFovDeg=v.fov;calibComplete=true;updateCameraIntrinsics();return true}}catch(e){}return false}
-function resetCalibration(){calibSamples=[];calibFaceCombos=new Set();calibScaleBuckets=new Set();calibComplete=false;calibBusy=false;cameraFovDeg=45;try{localStorage.removeItem(CALIB_KEY)}catch(e){}updateCalibUI();updateCameraIntrinsics()}
+
+function defaultCameraParams(W,H){
+ const fov=cameraFovDeg*Math.PI/180;
+ const fx=(W/2)/Math.tan(fov/2);
+ return {fx,fy:fx,cx:W/2,cy:H/2,dist:[0,0,0,0,0],W,H};
+}
+
+function getCameraParams(W,H){
+ if(cameraCalib && Number.isFinite(cameraCalib.fx) && cameraCalib.W>0 && cameraCalib.H>0){
+   const sx=W/cameraCalib.W, sy=H/cameraCalib.H;
+   return {
+     fx:cameraCalib.fx*sx,
+     fy:cameraCalib.fy*sy,
+     cx:cameraCalib.cx*sx,
+     cy:cameraCalib.cy*sy,
+     dist:Array.isArray(cameraCalib.dist)?cameraCalib.dist.slice(0,5):[0,0,0,0,0],
+     W,H
+   };
+ }
+ return defaultCameraParams(W,H);
+}
+
+function updateFovFromCalibration(){
+ if(cameraCalib && Number.isFinite(cameraCalib.fy) && cameraCalib.H){
+   cameraFovDeg=2*Math.atan(cameraCalib.H/(2*cameraCalib.fy))*180/Math.PI;
+ }
+ updateCameraIntrinsics();
+}
+
+function loadSavedCalibration(){
+ try{
+   const raw=localStorage.getItem(CALIB_KEY);
+   if(!raw) return false;
+   const v=JSON.parse(raw);
+   if(v && Number.isFinite(v.fx) && Number.isFinite(v.fy) &&
+      Number.isFinite(v.cx) && Number.isFinite(v.cy) &&
+      Number.isFinite(v.W) && Number.isFinite(v.H)){
+     cameraCalib=v;
+     calibComplete=true;
+     updateFovFromCalibration();
+     return true;
+   }
+ }catch(e){ console.warn("Falha ao ler calibração salva",e); }
+ return false;
+}
+function resetCalibration(){
+ calibSamples=[];
+ calibFaceCombos=new Set();
+ calibScaleBuckets=new Set();
+ calibComplete=false;
+ calibBusy=false;
+ cameraCalib=null;
+ cameraFovDeg=45;
+ try{localStorage.removeItem(CALIB_KEY)}catch(e){}
+ updateCalibUI();
+ updateCameraIntrinsics();
+}
 function updateCalibUI(){
  if(calibComplete){calibEl.style.display='none';return}
  calibEl.style.display='block';
@@ -273,7 +328,7 @@ function updateCalibUI(){
  const scalePart=Math.min(1,calibScaleBuckets.size/2);
 
  // A barra agora representa exatamente os três requisitos reais.
- const progress=Math.min(99,Math.round(samplePart*60 + comboPart*20 + scalePart*20));
+ const progress=Math.min(99,Math.round(samplePart*65 + comboPart*20 + scalePart*15));
  calibFill.style.width=progress+'%';
 
  if(count<3){
@@ -285,7 +340,7 @@ function updateCalibUI(){
  }else if(count<CALIB_MIN_SAMPLES){
    calibText.textContent='Continue girando devagar… '+progress+'%';
  }else{
-   calibText.textContent='Dados suficientes ✓ • ajustando a câmera…';
+   calibText.textContent='Dados suficientes ✓ • calibrando várias vistas…';
  }
 }
 function cloneDetectionSet(ds){return ds.map(d=>({id:d.id,score:d.score,corners:d.corners.map(p=>({x:p.x,y:p.y}))}))}
@@ -333,8 +388,162 @@ function maybeCollectCalibration(ds,W,H){
    setTimeout(runAutoCalibration,80);
  }
 }
-function solveSampleAtFov(sample,fovDeg){const obj=getOBJ();const good=sample.ds.filter(d=>obj[d.id]&&d.corners&&d.corners.length===4);if(good.length<2)return 999;let op=[],ip=[];for(const d of good){for(let i=0;i<4;i++){op.push(...obj[d.id][i]);ip.push(d.corners[i].x,d.corners[i].y)}}const n=ip.length/2;const objectPoints=cv.matFromArray(n,1,cv.CV_64FC3,op);const imagePoints=cv.matFromArray(n,1,cv.CV_64FC2,ip);const fov=fovDeg*Math.PI/180;const fx=(sample.W/2)/Math.tan(fov/2),fy=fx,cx=sample.W/2,cy=sample.H/2;const K=cv.matFromArray(3,3,cv.CV_64F,[fx,0,cx,0,fy,cy,0,0,1]);const distm=cv.Mat.zeros(4,1,cv.CV_64F),rvec=new cv.Mat(),tvec=new cv.Mat();let err=999;try{const ok=cv.solvePnP(objectPoints,imagePoints,K,distm,rvec,tvec,false,cv.SOLVEPNP_ITERATIVE);if(ok){const Rm=new cv.Mat();cv.Rodrigues(rvec,Rm);const pose={R:Array.from(Rm.data64F),t:Array.from(tvec.data64F),fx,fy,cx,cy};let sum=0,count=0;for(const d of good){const pts=obj[d.id];for(let i=0;i<4;i++){const q=project3(pts[i],pose);if(!q)continue;const dx=q[0]-d.corners[i].x,dy=q[1]-d.corners[i].y;sum+=dx*dx+dy*dy;count++}}err=count?Math.sqrt(sum/count):999;Rm.delete()}}catch(e){}objectPoints.delete();imagePoints.delete();K.delete();distm.delete();rvec.delete();tvec.delete();return err}
-async function runAutoCalibration(){if(calibBusy||calibComplete||calibSamples.length<CALIB_MIN_SAMPLES)return;calibBusy=true;calibText.textContent='Ajustando câmera…';try{const samples=calibSamples.slice(-12);let bestFov=cameraFovDeg,bestErr=Infinity;for(let f=34;f<=74;f+=4){let errs=[];for(const s of samples){const e=solveSampleAtFov(s,f);if(Number.isFinite(e)&&e<40)errs.push(e)}if(errs.length<Math.max(5,Math.floor(samples.length*.6)))continue;errs.sort((a,b)=>a-b);const trimmed=errs.slice(0,Math.max(3,Math.ceil(errs.length*.8)));const mean=trimmed.reduce((a,b)=>a+b,0)/trimmed.length;if(mean<bestErr){bestErr=mean;bestFov=f}await new Promise(r=>setTimeout(r,0))}for(let f=Math.max(30,bestFov-4);f<=Math.min(82,bestFov+4);f+=1){let errs=[];for(const s of samples){const e=solveSampleAtFov(s,f);if(Number.isFinite(e)&&e<40)errs.push(e)}if(errs.length<5)continue;errs.sort((a,b)=>a-b);const trimmed=errs.slice(0,Math.max(3,Math.ceil(errs.length*.8)));const mean=trimmed.reduce((a,b)=>a+b,0)/trimmed.length;if(mean<bestErr){bestErr=mean;bestFov=f}await new Promise(r=>setTimeout(r,0))}if(Number.isFinite(bestErr)&&bestErr<12){cameraFovDeg=bestFov;calibComplete=true;try{localStorage.setItem(CALIB_KEY,JSON.stringify({fov:bestFov,error:bestErr,ts:Date.now()}))}catch(e){}updateCameraIntrinsics();calibFill.style.width='100%';calibText.textContent='Calibração concluída ✓';calibEl.style.display='block';setTimeout(()=>{calibEl.style.display='none'},1400);statusEl.textContent='Câmera calibrada ✓ • FOV '+bestFov.toFixed(0)+'°'}else{calibText.textContent='Ainda falta variedade. Mostre duas faces e mude um pouco a distância…'}}finally{calibBusy=false}}
+
+function buildCalibrationView(sample){
+ const obj=getOBJ();
+ const good=sample.ds.filter(d=>obj[d.id]&&d.corners&&d.corners.length===4);
+ if(good.length<2) return null;
+
+ const op=[], ip=[];
+ for(const d of good){
+   for(let i=0;i<4;i++){
+     op.push(...obj[d.id][i]);
+     ip.push(d.corners[i].x,d.corners[i].y);
+   }
+ }
+ if(ip.length/2 < 8) return null;
+
+ // calibrateCamera trabalha melhor com float em seus vetores de pontos.
+ const objectMat=cv.matFromArray(ip.length/2,1,cv.CV_32FC3,op);
+ const imageMat=cv.matFromArray(ip.length/2,1,cv.CV_32FC2,ip);
+ return {objectMat,imageMat};
+}
+
+function matrixValue(mat,r,c){
+ if(mat.data64F && mat.data64F.length) return mat.data64F[r*mat.cols+c];
+ if(mat.data32F && mat.data32F.length) return mat.data32F[r*mat.cols+c];
+ return NaN;
+}
+
+async function runAutoCalibration(){
+ if(calibBusy||calibComplete||calibSamples.length<CALIB_MIN_SAMPLES) return;
+ if(typeof cv.calibrateCamera!=="function"){
+   calibText.textContent='Este motor OpenCV não expõe calibrateCamera.';
+   return;
+ }
+
+ calibBusy=true;
+ calibText.textContent='Calibrando várias vistas…';
+
+ const objectPoints=new cv.MatVector();
+ const imagePoints=new cv.MatVector();
+ const owned=[];
+
+ try{
+   // Usa vistas recentes e válidas, todas na mesma resolução de análise.
+   const samples=calibSamples.slice(-CALIB_TARGET_SAMPLES);
+   let W=0,H=0,views=0;
+
+   for(const s of samples){
+     if(!W){W=s.W;H=s.H;}
+     if(s.W!==W || s.H!==H) continue;
+
+     const view=buildCalibrationView(s);
+     if(!view) continue;
+     objectPoints.push_back(view.objectMat);
+     imagePoints.push_back(view.imageMat);
+     owned.push(view.objectMat,view.imageMat);
+     views++;
+   }
+
+   if(views<CALIB_MIN_SAMPLES){
+     calibText.textContent='Ainda faltam boas vistas multiface…';
+     return;
+   }
+
+   const guess=defaultCameraParams(W,H);
+   const cameraMatrix=cv.matFromArray(3,3,cv.CV_64F,[
+     guess.fx,0,W/2,
+     0,guess.fy,H/2,
+     0,0,1
+   ]);
+   const distCoeffs=cv.Mat.zeros(5,1,cv.CV_64F);
+   const rvecs=new cv.MatVector();
+   const tvecs=new cv.MatVector();
+
+   let flags=0;
+   if(typeof cv.CALIB_USE_INTRINSIC_GUESS!=="undefined") flags|=cv.CALIB_USE_INTRINSIC_GUESS;
+   // Cubo pequeno + poucas vistas: estas restrições evitam overfitting.
+   if(typeof cv.CALIB_FIX_PRINCIPAL_POINT!=="undefined") flags|=cv.CALIB_FIX_PRINCIPAL_POINT;
+   if(typeof cv.CALIB_FIX_ASPECT_RATIO!=="undefined") flags|=cv.CALIB_FIX_ASPECT_RATIO;
+   if(typeof cv.CALIB_ZERO_TANGENT_DIST!=="undefined") flags|=cv.CALIB_ZERO_TANGENT_DIST;
+   if(typeof cv.CALIB_FIX_K3!=="undefined") flags|=cv.CALIB_FIX_K3;
+
+   let rms=Infinity;
+   try{
+     rms=cv.calibrateCamera(
+       objectPoints,imagePoints,
+       new cv.Size(W,H),
+       cameraMatrix,distCoeffs,
+       rvecs,tvecs,
+       flags
+     );
+   }catch(e){
+     console.error("calibrateCamera falhou:",e);
+     calibText.textContent='A calibração precisa de mais variedade. Gire e mude a distância…';
+     cameraMatrix.delete(); distCoeffs.delete(); rvecs.delete(); tvecs.delete();
+     return;
+   }
+
+   const fx=matrixValue(cameraMatrix,0,0);
+   const fy=matrixValue(cameraMatrix,1,1);
+   const cx=matrixValue(cameraMatrix,0,2);
+   const cy=matrixValue(cameraMatrix,1,2);
+
+   const dist=[];
+   const dsrc=(distCoeffs.data64F&&distCoeffs.data64F.length)?distCoeffs.data64F:distCoeffs.data32F;
+   for(let i=0;i<Math.min(5,dsrc.length);i++) dist.push(Number(dsrc[i]));
+   while(dist.length<5) dist.push(0);
+
+   const fovY=2*Math.atan(H/(2*fy))*180/Math.PI;
+   const plausible =
+     Number.isFinite(rms) && rms<10 &&
+     Number.isFinite(fx) && Number.isFinite(fy) &&
+     fx>W*.45 && fx<W*3.5 &&
+     fy>H*.45 && fy<H*5.0 &&
+     fovY>25 && fovY<90;
+
+   if(plausible){
+     cameraCalib={
+       fx,fy,cx,cy,dist,
+       W,H,
+       rms:Number(rms),
+       views,
+       ts:Date.now()
+     };
+     updateFovFromCalibration();
+     calibComplete=true;
+
+     try{localStorage.setItem(CALIB_KEY,JSON.stringify(cameraCalib))}catch(e){}
+
+     calibFill.style.width='100%';
+     calibText.textContent='Calibração multi-view concluída ✓';
+     calibEl.style.display='block';
+     setTimeout(()=>{calibEl.style.display='none'},1700);
+
+     statusEl.textContent=
+       'Câmera calibrada ✓ • erro '+Number(rms).toFixed(2)+' px • '+views+' vistas';
+   }else{
+     calibText.textContent='Resultado ainda instável. Mostre mais ângulos e distâncias…';
+     // Mantém algumas amostras, mas força a coleta de novas vistas.
+     calibSamples=calibSamples.slice(-Math.max(4,Math.floor(CALIB_MIN_SAMPLES/2)));
+     calibFaceCombos=new Set(calibSamples.map(s=>s.combo));
+     calibScaleBuckets=new Set(calibSamples.map(s=>s.bucket));
+     updateCalibUI();
+   }
+
+   cameraMatrix.delete();
+   distCoeffs.delete();
+   rvecs.delete();
+   tvecs.delete();
+ }finally{
+   for(const m of owned){ try{m.delete()}catch(e){} }
+   try{objectPoints.delete()}catch(e){}
+   try{imagePoints.delete()}catch(e){}
+   calibBusy=false;
+ }
+}
+
 loadSavedCalibration();updateCalibUI();
 async function initDetector(){
  statusEl.textContent="Câmera aberta ✓ • preparando detector…";
@@ -568,9 +777,11 @@ async function solveBundle(ds,W,H){
  const n=ip.length/2;
  const objectPoints=cv.matFromArray(n,1,cv.CV_64FC3,op);
  const imagePoints=cv.matFromArray(n,1,cv.CV_64FC2,ip);
- const fov=cameraFovDeg*Math.PI/180, fx=(W/2)/Math.tan(fov/2), fy=fx, cx=W/2, cy=H/2;
+ const cam=getCameraParams(W,H);
+ const fx=cam.fx, fy=cam.fy, cx=cam.cx, cy=cam.cy;
  const K=cv.matFromArray(3,3,cv.CV_64F,[fx,0,cx, 0,fy,cy, 0,0,1]);
- const dist=cv.Mat.zeros(4,1,cv.CV_64F),rvec=new cv.Mat(),tvec=new cv.Mat();
+ const dist=cv.matFromArray(5,1,cv.CV_64F,cam.dist);
+ const rvec=new cv.Mat(),tvec=new cv.Mat();
  let ok=false;
  try{ ok=cv.solvePnP(objectPoints,imagePoints,K,dist,rvec,tvec,false,cv.SOLVEPNP_ITERATIVE); }catch(e){ok=false}
  if(!ok){[objectPoints,imagePoints,K,dist,rvec,tvec].forEach(m=>m.delete());return null}
