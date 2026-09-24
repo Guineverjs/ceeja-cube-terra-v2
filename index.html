@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>CEEJA Cube — Tracker 2.0 • AutoCal Multi-View v4.2</title>
+<title>CEEJA Cube — Tracker 2.0 • AutoCal Multi-View v4.3</title>
 <style>
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070a;font-family:Arial,sans-serif;color:white}
 #video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover;background:#000}
@@ -21,7 +21,7 @@
 <body>
 <video id="video" autoplay muted playsinline></video>
 <canvas id="overlay"></canvas>
-<div id="top"><div id="title">🌍 CEEJA Cube — Tracker 2.0 • AutoCal Multi-View v4.2</div>
+<div id="top"><div id="title">🌍 CEEJA Cube — Tracker 2.0 • AutoCal Multi-View v4.3</div>
 <div id="status">Pronto para iniciar.</div><button id="start">ABRIR CÂMERA</button></div>
 <div id="faces"><span class="muted">Nenhuma face detectada ainda.</span></div>
 <div id="planetLabel">EARTH • 3D</div>
@@ -54,7 +54,7 @@ let targetPose3d=null, currentPose3d=null, loopsStarted=false;
 let srcW=560, srcH=315;
 let cameraFovDeg=45, cameraCalib=null, calibSamples=[], calibBusy=false, calibComplete=false, lastCalibSampleAt=0;
 let calibFaceCombos=new Set(), calibScaleBuckets=new Set();
-const CALIB_KEY="CEEJA_CUBE_CAMERA_MULTIVIEW_V2";
+const CALIB_KEY="CEEJA_CUBE_CAMERA_MULTIVIEW_V3";
 
 const FALLBACK_MS=320;
 const POS_ALPHA_MULTI=.42, POS_ALPHA_SINGLE=.18;
@@ -340,7 +340,7 @@ function updateCalibUI(){
  }else if(count<CALIB_MIN_SAMPLES){
    calibText.textContent='Continue girando devagar… '+progress+'%';
  }else{
-   calibText.textContent='Dados suficientes ✓ • calibrando várias vistas…';
+   calibText.textContent='Dados suficientes ✓ • preparando otimização multi-view…';
  }
 }
 function cloneDetectionSet(ds){return ds.map(d=>({id:d.id,score:d.score,corners:d.corners.map(p=>({x:p.x,y:p.y}))}))}
@@ -389,157 +389,248 @@ function maybeCollectCalibration(ds,W,H){
  }
 }
 
-function buildCalibrationView(sample){
+
+function calibrationSampleError(sample,params){
  const obj=getOBJ();
  const good=sample.ds.filter(d=>obj[d.id]&&d.corners&&d.corners.length===4);
- if(good.length<2) return null;
+ if(good.length<2) return 999;
 
- const op=[], ip=[];
+ const op=[],ip=[];
  for(const d of good){
    for(let i=0;i<4;i++){
      op.push(...obj[d.id][i]);
      ip.push(d.corners[i].x,d.corners[i].y);
    }
  }
- if(ip.length/2 < 8) return null;
+ const n=ip.length/2;
+ if(n<8) return 999;
 
- // calibrateCamera trabalha melhor com float em seus vetores de pontos.
- const objectMat=cv.matFromArray(ip.length/2,1,cv.CV_32FC3,op);
- const imageMat=cv.matFromArray(ip.length/2,1,cv.CV_32FC2,ip);
- return {objectMat,imageMat};
+ const objectPoints=cv.matFromArray(n,1,cv.CV_64FC3,op);
+ const imagePoints=cv.matFromArray(n,1,cv.CV_64FC2,ip);
+ const K=cv.matFromArray(3,3,cv.CV_64F,[
+   params.fx,0,params.cx,
+   0,params.fy,params.cy,
+   0,0,1
+ ]);
+ const distm=cv.Mat.zeros(5,1,cv.CV_64F);
+ const rvec=new cv.Mat(),tvec=new cv.Mat();
+
+ let err=999;
+ try{
+   const ok=cv.solvePnP(
+     objectPoints,imagePoints,K,distm,
+     rvec,tvec,false,cv.SOLVEPNP_ITERATIVE
+   );
+   if(ok){
+     const Rm=new cv.Mat();
+     cv.Rodrigues(rvec,Rm);
+     const pose={
+       R:Array.from(Rm.data64F),
+       t:Array.from(tvec.data64F),
+       fx:params.fx,fy:params.fy,cx:params.cx,cy:params.cy
+     };
+
+     let sum=0,count=0;
+     for(const d of good){
+       const pts=obj[d.id];
+       for(let i=0;i<4;i++){
+         const q=project3(pts[i],pose);
+         if(!q) continue;
+         const dx=q[0]-d.corners[i].x;
+         const dy=q[1]-d.corners[i].y;
+         sum+=dx*dx+dy*dy;
+         count++;
+       }
+     }
+     if(count) err=Math.sqrt(sum/count);
+     Rm.delete();
+   }
+ }catch(e){}
+
+ objectPoints.delete(); imagePoints.delete(); K.delete();
+ distm.delete(); rvec.delete(); tvec.delete();
+ return err;
 }
 
-function matrixValue(mat,r,c){
- if(mat.data64F && mat.data64F.length) return mat.data64F[r*mat.cols+c];
- if(mat.data32F && mat.data32F.length) return mat.data32F[r*mat.cols+c];
- return NaN;
+async function calibrationObjective(samples,params){
+ const errs=[];
+ for(let i=0;i<samples.length;i++){
+   const e=calibrationSampleError(samples[i],params);
+   if(Number.isFinite(e) && e<40) errs.push(e);
+   // Não bloqueia a interface durante a otimização.
+   if(i%3===2) await new Promise(r=>setTimeout(r,0));
+ }
+ if(errs.length<Math.max(6,Math.floor(samples.length*.65))){
+   return {score:999,valid:errs.length,mean:999};
+ }
+
+ errs.sort((a,b)=>a-b);
+ // Trimmed mean: reduz o peso de um frame ruim.
+ const keep=Math.max(5,Math.ceil(errs.length*.82));
+ const trimmed=errs.slice(0,keep);
+ const mean=trimmed.reduce((a,b)=>a+b,0)/trimmed.length;
+
+ // Regularização leve para evitar soluções matemáticas estranhas.
+ const W=samples[0].W,H=samples[0].H;
+ const aspectPenalty=Math.abs(Math.log(params.fx/params.fy))*0.35;
+ const centerPenalty=(
+   Math.abs(params.cx-W/2)/(W*.20) +
+   Math.abs(params.cy-H/2)/(H*.20)
+ )*.08;
+
+ return {
+   score:mean+aspectPenalty+centerPenalty,
+   valid:errs.length,
+   mean
+ };
+}
+
+function clampCameraParams(p,W,H){
+ return {
+   fx:clamp(p.fx,W*.55,W*2.8),
+   fy:clamp(p.fy,H*.85,H*4.8),
+   cx:clamp(p.cx,W*.40,W*.60),
+   cy:clamp(p.cy,H*.40,H*.60)
+ };
 }
 
 async function runAutoCalibration(){
  if(calibBusy||calibComplete||calibSamples.length<CALIB_MIN_SAMPLES) return;
- if(typeof cv.calibrateCamera!=="function"){
-   calibText.textContent='Este motor OpenCV não expõe calibrateCamera.';
-   return;
- }
 
  calibBusy=true;
- calibText.textContent='Calibrando várias vistas…';
-
- const objectPoints=new cv.MatVector();
- const imagePoints=new cv.MatVector();
- const owned=[];
+ calibText.textContent='Otimizando câmera em várias vistas…';
 
  try{
-   // Usa vistas recentes e válidas, todas na mesma resolução de análise.
-   const samples=calibSamples.slice(-CALIB_TARGET_SAMPLES);
-   let W=0,H=0,views=0;
+   const samples=calibSamples
+     .slice(-CALIB_TARGET_SAMPLES)
+     .filter(s=>s.ds && s.ds.length>=2);
 
-   for(const s of samples){
-     if(!W){W=s.W;H=s.H;}
-     if(s.W!==W || s.H!==H) continue;
-
-     const view=buildCalibrationView(s);
-     if(!view) continue;
-     objectPoints.push_back(view.objectMat);
-     imagePoints.push_back(view.imageMat);
-     owned.push(view.objectMat,view.imageMat);
-     views++;
-   }
-
-   if(views<CALIB_MIN_SAMPLES){
+   if(samples.length<CALIB_MIN_SAMPLES){
      calibText.textContent='Ainda faltam boas vistas multiface…';
      return;
    }
 
-   const guess=defaultCameraParams(W,H);
-   const cameraMatrix=cv.matFromArray(3,3,cv.CV_64F,[
-     guess.fx,0,W/2,
-     0,guess.fy,H/2,
-     0,0,1
-   ]);
-   const distCoeffs=cv.Mat.zeros(5,1,cv.CV_64F);
-   const rvecs=new cv.MatVector();
-   const tvecs=new cv.MatVector();
-
-   let flags=0;
-   if(typeof cv.CALIB_USE_INTRINSIC_GUESS!=="undefined") flags|=cv.CALIB_USE_INTRINSIC_GUESS;
-   // Cubo pequeno + poucas vistas: estas restrições evitam overfitting.
-   if(typeof cv.CALIB_FIX_PRINCIPAL_POINT!=="undefined") flags|=cv.CALIB_FIX_PRINCIPAL_POINT;
-   if(typeof cv.CALIB_FIX_ASPECT_RATIO!=="undefined") flags|=cv.CALIB_FIX_ASPECT_RATIO;
-   if(typeof cv.CALIB_ZERO_TANGENT_DIST!=="undefined") flags|=cv.CALIB_ZERO_TANGENT_DIST;
-   if(typeof cv.CALIB_FIX_K3!=="undefined") flags|=cv.CALIB_FIX_K3;
-
-   let rms=Infinity;
-   try{
-     rms=cv.calibrateCamera(
-       objectPoints,imagePoints,
-       new cv.Size(W,H),
-       cameraMatrix,distCoeffs,
-       rvecs,tvecs,
-       flags
-     );
-   }catch(e){
-     console.error("calibrateCamera falhou:",e);
-     calibText.textContent='A calibração precisa de mais variedade. Gire e mude a distância…';
-     cameraMatrix.delete(); distCoeffs.delete(); rvecs.delete(); tvecs.delete();
+   const W=samples[0].W,H=samples[0].H;
+   const same=samples.filter(s=>s.W===W&&s.H===H);
+   if(same.length<CALIB_MIN_SAMPLES){
+     calibText.textContent='Continue girando o cubo devagar…';
      return;
    }
 
-   const fx=matrixValue(cameraMatrix,0,0);
-   const fy=matrixValue(cameraMatrix,1,1);
-   const cx=matrixValue(cameraMatrix,0,2);
-   const cy=matrixValue(cameraMatrix,1,2);
+   // Etapa 1: escolhe uma focal inicial em uma grade pequena.
+   let best=null,bestEval={score:999,mean:999,valid:0};
+   const fovCandidates=[36,42,48,54,60,66,72];
 
-   const dist=[];
-   const dsrc=(distCoeffs.data64F&&distCoeffs.data64F.length)?distCoeffs.data64F:distCoeffs.data32F;
-   for(let i=0;i<Math.min(5,dsrc.length);i++) dist.push(Number(dsrc[i]));
-   while(dist.length<5) dist.push(0);
+   for(let i=0;i<fovCandidates.length;i++){
+     const f=fovCandidates[i]*Math.PI/180;
+     const fx=(W/2)/Math.tan(f/2);
+     const cand={fx,fy:fx,cx:W/2,cy:H/2};
+     const ev=await calibrationObjective(same,cand);
+     if(ev.score<bestEval.score){best=cand;bestEval=ev;}
+     calibFill.style.width=(76+i*2)+'%';
+     calibText.textContent='Calibrando câmera… '+(76+i*2)+'%';
+   }
 
-   const fovY=2*Math.atan(H/(2*fy))*180/Math.PI;
-   const plausible =
-     Number.isFinite(rms) && rms<10 &&
-     Number.isFinite(fx) && Number.isFinite(fy) &&
-     fx>W*.45 && fx<W*3.5 &&
-     fy>H*.45 && fy<H*5.0 &&
+   if(!best || bestEval.score>=999){
+     calibText.textContent='Não consegui uma solução. Mostre mais duas faces ao mesmo tempo…';
+     return;
+   }
+
+   // Etapa 2: coordinate descent em fx, fy, cx e cy.
+   // Cada rodada reduz o passo pela metade.
+   let steps={
+     fx:best.fx*.12,
+     fy:best.fy*.12,
+     cx:W*.035,
+     cy:H*.035
+   };
+
+   const keys=['fx','fy','cx','cy'];
+   let evalCounter=0;
+   const totalEvals=keys.length*2*4;
+
+   for(let round=0;round<4;round++){
+     for(const key of keys){
+       let localBest=best;
+       let localEval=bestEval;
+
+       for(const sign of [-1,1]){
+         const cand={...best};
+         cand[key]+=sign*steps[key];
+         const bounded=clampCameraParams(cand,W,H);
+         const ev=await calibrationObjective(same,bounded);
+         evalCounter++;
+
+         const pct=Math.min(98,90+Math.round((evalCounter/totalEvals)*8));
+         calibFill.style.width=pct+'%';
+         calibText.textContent='Ajustando intrínsecos… '+pct+'%';
+
+         if(ev.score<localEval.score){
+           localBest=bounded;
+           localEval=ev;
+         }
+       }
+
+       best=localBest;
+       bestEval=localEval;
+     }
+
+     steps.fx*=.52;
+     steps.fy*=.52;
+     steps.cx*=.52;
+     steps.cy*=.52;
+   }
+
+   const fovY=2*Math.atan(H/(2*best.fy))*180/Math.PI;
+   const plausible=
+     Number.isFinite(bestEval.mean) &&
+     bestEval.mean<10 &&
+     bestEval.valid>=Math.max(7,Math.floor(same.length*.7)) &&
      fovY>25 && fovY<90;
 
    if(plausible){
      cameraCalib={
-       fx,fy,cx,cy,dist,
+       fx:Number(best.fx),
+       fy:Number(best.fy),
+       cx:Number(best.cx),
+       cy:Number(best.cy),
+       dist:[0,0,0,0,0],
        W,H,
-       rms:Number(rms),
-       views,
+       rms:Number(bestEval.mean),
+       views:Number(bestEval.valid),
+       method:'multiview-coordinate-descent-v43',
        ts:Date.now()
      };
+
      updateFovFromCalibration();
      calibComplete=true;
 
-     try{localStorage.setItem(CALIB_KEY,JSON.stringify(cameraCalib))}catch(e){}
+     try{
+       localStorage.setItem(CALIB_KEY,JSON.stringify(cameraCalib));
+     }catch(e){}
 
      calibFill.style.width='100%';
-     calibText.textContent='Calibração multi-view concluída ✓';
+     calibText.textContent='Calibração concluída ✓';
      calibEl.style.display='block';
-     setTimeout(()=>{calibEl.style.display='none'},1700);
 
      statusEl.textContent=
-       'Câmera calibrada ✓ • erro '+Number(rms).toFixed(2)+' px • '+views+' vistas';
+       'Câmera calibrada ✓ • erro '+bestEval.mean.toFixed(2)+
+       ' px • '+bestEval.valid+' vistas';
+
+     setTimeout(()=>{calibEl.style.display='none'},1800);
    }else{
-     calibText.textContent='Resultado ainda instável. Mostre mais ângulos e distâncias…';
-     // Mantém algumas amostras, mas força a coleta de novas vistas.
-     calibSamples=calibSamples.slice(-Math.max(4,Math.floor(CALIB_MIN_SAMPLES/2)));
+     calibText.textContent='Ainda instável. Mostre novos ângulos e mude a distância…';
+
+     // Mantém metade das melhores oportunidades e volta a coletar.
+     calibSamples=calibSamples.slice(-Math.max(5,Math.floor(CALIB_MIN_SAMPLES/2)));
      calibFaceCombos=new Set(calibSamples.map(s=>s.combo));
      calibScaleBuckets=new Set(calibSamples.map(s=>s.bucket));
      updateCalibUI();
    }
-
-   cameraMatrix.delete();
-   distCoeffs.delete();
-   rvecs.delete();
-   tvecs.delete();
+ }catch(e){
+   console.error('AutoCal v4.3:',e);
+   calibText.textContent='Falha na calibração. Continue usando o cubo e tente mais ângulos…';
  }finally{
-   for(const m of owned){ try{m.delete()}catch(e){} }
-   try{objectPoints.delete()}catch(e){}
-   try{imagePoints.delete()}catch(e){}
    calibBusy=false;
  }
 }
