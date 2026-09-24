@@ -16,3 +16,5 @@ Correção v2.3: o OpenCV/detector só é inicializado depois que a usuária toc
 Correção v2.4: removido o carregador antigo do OpenCV. Agora o motor é importado sob demanda com @opencvjs/web apenas depois de abrir a câmera.
 
 Correção v2.5: detector mais tolerante a inclinação, sombra e foco; usa Otsu + threshold adaptativo, RETR_LIST, comparação em 32×32, resolução de análise 560 px e fallback aumentado para 500 ms.
+
+Correção v2.6: profundidade e escala estabilizadas quando há apenas 1 face. Usa a última pose multiface como âncora de Z/X/Y, reduz saltos de raio/centro na tela e mantém fallback anterior.

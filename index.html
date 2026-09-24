@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>CEEJA Cube — Terra Realista v2.5</title>
+<title>CEEJA Cube — Terra Realista v2.6</title>
 <style>
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070a;font-family:Arial,sans-serif;color:white}
 #video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover;background:#000}
@@ -18,7 +18,7 @@
 <body>
 <video id="video" autoplay muted playsinline></video>
 <canvas id="overlay"></canvas>
-<div id="top"><div id="title">🌍 CEEJA Cube — Terra Realista v2.5</div>
+<div id="top"><div id="title">🌍 CEEJA Cube — Terra Realista v2.6</div>
 <div id="status">Pronto para iniciar.</div><button id="start">ABRIR CÂMERA</button></div>
 <div id="faces"><span class="muted">Nenhuma face detectada ainda.</span></div>
 <canvas id="work" width="480" height="360" style="display:none"></canvas>
@@ -38,12 +38,21 @@ overlay=document.getElementById("overlay"), statusEl=document.getElementById("st
 facesEl=document.getElementById("faces"), start=document.getElementById("start");
 let ready=false, busy=false, cvReady=false, cv=null;
 let templates=[], lastPose=null, lastPoseAt=0, smoothedPose=null;
+let lastMultiPose=null, lastMultiPoseAt=0, lastDrawState=null;
 
 const FALLBACK_MS=500;
-const POS_ALPHA_MULTI=.42, POS_ALPHA_SINGLE=.24;
-const ROT_ALPHA_MULTI=.38, ROT_ALPHA_SINGLE=.20;
+const POS_ALPHA_MULTI=.42, POS_ALPHA_SINGLE=.18;
+const ROT_ALPHA_MULTI=.38, ROT_ALPHA_SINGLE=.16;
 const MAX_SINGLE_JUMP_M=.055;
 const MAX_REPROJ_MULTI=8.0, MAX_REPROJ_SINGLE=5.8;
+const MULTI_ANCHOR_MS=1800;
+const SINGLE_Z_CLAMP=.010;
+const SINGLE_Z_BLEND=.88;
+const SINGLE_XY_BLEND=.55;
+const SINGLE_SCREEN_RADIUS_STEP=.08;
+const SINGLE_SCREEN_CENTER_BLEND=.32;
+const MULTI_SCREEN_RADIUS_BLEND=.38;
+const MULTI_SCREEN_CENTER_BLEND=.46;
 const HALF=.022;          // cube: 44 mm
 const TAG_HALF=.01585;    // marker black square: 31.7 mm / 2
 const EARTH_RADIUS=.060;  // 12 cm diameter virtual Earth
@@ -118,6 +127,7 @@ function quadArea(pts){
 }
 function centerOf(c){return {x:(c[0].x+c[1].x+c[2].x+c[3].x)/4,y:(c[0].y+c[1].y+c[2].y+c[3].y)/4};}
 function dist(a,b){const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy)}
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
 
 async function initDetector(){
  statusEl.textContent="Câmera aberta ✓ • preparando detector…";
@@ -383,13 +393,50 @@ function slerp(a,b,t){
 }
 function poseDistance(a,b){return Math.hypot(a.t[0]-b.t[0],a.t[1]-b.t[1],a.t[2]-b.t[2]);}
 function smoothPose(raw){
- if(!smoothedPose){smoothedPose={...raw,R:raw.R.slice(),t:raw.t.slice()}; return smoothedPose;}
+ const now=performance.now();
+
+ if(!smoothedPose){
+   smoothedPose={...raw,R:raw.R.slice(),t:raw.t.slice()};
+   if(!raw.single){
+     lastMultiPose={...smoothedPose,R:smoothedPose.R.slice(),t:smoothedPose.t.slice()};
+     lastMultiPoseAt=now;
+   }
+   return smoothedPose;
+ }
+
  if(raw.single && poseDistance(raw,smoothedPose)>MAX_SINGLE_JUMP_M) return smoothedPose;
+
  const pa=raw.single?POS_ALPHA_SINGLE:POS_ALPHA_MULTI;
  const ra=raw.single?ROT_ALPHA_SINGLE:ROT_ALPHA_MULTI;
- const t=smoothedPose.t.map((v,i)=>v+(raw.t[i]-v)*pa);
+
+ let targetT=raw.t.slice();
+
+ // Quando houver só 1 face, confiamos mais na última pose multiface
+ // para profundidade (Z) e parcialmente para X/Y.
+ if(raw.single && lastMultiPose && (now-lastMultiPoseAt)<=MULTI_ANCHOR_MS){
+   const az=lastMultiPose.t[2];
+   const dz=clamp(targetT[2]-az,-SINGLE_Z_CLAMP,SINGLE_Z_CLAMP);
+   const anchoredZ=az + dz*(1-SINGLE_Z_BLEND);
+
+   const ax=lastMultiPose.t[0], ay=lastMultiPose.t[1];
+   const anchoredX=ax + (targetT[0]-ax)*(1-SINGLE_XY_BLEND);
+   const anchoredY=ay + (targetT[1]-ay)*(1-SINGLE_XY_BLEND);
+
+   targetT[0]=anchoredX;
+   targetT[1]=anchoredY;
+   targetT[2]=anchoredZ;
+ }
+
+ const t=smoothedPose.t.map((v,i)=>v+(targetT[i]-v)*pa);
  const q0=matToQuat(smoothedPose.R), q1=matToQuat(raw.R), q=slerp(q0,q1,ra);
+
  smoothedPose={...raw,t,R:quatToMat(q)};
+
+ if(!raw.single){
+   lastMultiPose={...smoothedPose,R:smoothedPose.R.slice(),t:smoothedPose.t.slice()};
+   lastMultiPoseAt=now;
+ }
+
  return smoothedPose;
 }
 function project3(P,pose){
@@ -403,33 +450,85 @@ function render(ds){
  facesEl.innerHTML=last.length>=2 ? '<span class="ok">🌍 Rastreamento multiface</span><br><span class="muted">'+last.map(d=>N[d.id]).join(' + ')+'</span>' : '<span class="ok">🌍 Transição por 1 face</span><br><span class="muted">'+last.map(d=>N[d.id]).join(' + ')+'</span>';
 }
 function drawEarth(ds,sw,sh,pose){
- const ctx=overlay.getContext('2d'); ctx.clearRect(0,0,overlay.width,overlay.height);
- if(!pose)return;
+ const ctx=overlay.getContext('2d');
+ ctx.clearRect(0,0,overlay.width,overlay.height);
+ if(!pose){
+   lastDrawState=null;
+   return;
+ }
+
  const vw=innerWidth,vh=innerHeight,scale=Math.max(vw/sw,vh/sh);
  const ox=(vw-sw*scale)/2, oy=(vh-sh*scale)/2, dp=devicePixelRatio;
  const S=p=>[ox+p[0]*scale, oy+p[1]*scale];
  const C3=[0,0,0], RADIUS=EARTH_RADIUS;
  const cp=project3(C3,pose), xp=project3([RADIUS,0,0],pose), yp=project3([0,RADIUS,0],pose);
  if(!cp||!xp||!yp)return;
- const C=S(cp), X=S(xp), Y=S(yp);
- const rad=(Math.hypot(X[0]-C[0],X[1]-C[1])+Math.hypot(Y[0]-C[0],Y[1]-C[1]))/2;
- ctx.save(); ctx.scale(dp,dp);
- ctx.shadowColor='rgba(70,190,255,.72)'; ctx.shadowBlur=20;
- ctx.fillStyle='#0a4c88'; ctx.beginPath(); ctx.arc(C[0],C[1],rad,0,Math.PI*2); ctx.fill(); ctx.shadowBlur=0;
+
+ let C=S(cp), X=S(xp), Y=S(yp);
+ let rad=(Math.hypot(X[0]-C[0],X[1]-C[1])+Math.hypot(Y[0]-C[0],Y[1]-C[1]))/2;
+
+ // Estabilização em tela: quando só há 1 face, não deixamos o raio
+ // nem o centro "saltarem" bruscamente.
+ if(lastDrawState){
+   if(pose.single){
+     const minR=lastDrawState.rad*(1-SINGLE_SCREEN_RADIUS_STEP);
+     const maxR=lastDrawState.rad*(1+SINGLE_SCREEN_RADIUS_STEP);
+     rad=clamp(rad,minR,maxR);
+     C=[
+       lastDrawState.cx + (C[0]-lastDrawState.cx)*SINGLE_SCREEN_CENTER_BLEND,
+       lastDrawState.cy + (C[1]-lastDrawState.cy)*SINGLE_SCREEN_CENTER_BLEND
+     ];
+   }else{
+     rad=lastDrawState.rad + (rad-lastDrawState.rad)*MULTI_SCREEN_RADIUS_BLEND;
+     C=[
+       lastDrawState.cx + (C[0]-lastDrawState.cx)*MULTI_SCREEN_CENTER_BLEND,
+       lastDrawState.cy + (C[1]-lastDrawState.cy)*MULTI_SCREEN_CENTER_BLEND
+     ];
+   }
+ }
+ lastDrawState={cx:C[0], cy:C[1], rad, single:pose.single, at:performance.now()};
+
+ ctx.save();
+ ctx.scale(dp,dp);
+ ctx.shadowColor='rgba(70,190,255,.72)';
+ ctx.shadowBlur=20;
+ ctx.fillStyle='#0a4c88';
+ ctx.beginPath();
+ ctx.arc(C[0],C[1],rad,0,Math.PI*2);
+ ctx.fill();
+ ctx.shadowBlur=0;
+
  const tex=document.getElementById('earthTexture');
- ctx.save(); ctx.beginPath(); ctx.arc(C[0],C[1],rad*.985,0,Math.PI*2); ctx.clip();
+ ctx.save();
+ ctx.beginPath();
+ ctx.arc(C[0],C[1],rad*.985,0,Math.PI*2);
+ ctx.clip();
+
  if(tex && tex.complete && tex.naturalWidth){
    const tw=tex.naturalWidth, th=tex.naturalHeight, spin=((performance.now()/28000)%1), sx=spin*tw, d=rad*2;
    ctx.drawImage(tex,sx,0,tw-sx,th,C[0]-rad,C[1]-rad,d*(tw-sx)/tw,d);
    if(sx>0) ctx.drawImage(tex,0,0,sx,th,C[0]-rad+d*(tw-sx)/tw,C[1]-rad,d*sx/tw,d);
  } else {
    const g=ctx.createRadialGradient(C[0]-rad*.3,C[1]-rad*.3,rad*.1,C[0],C[1],rad);
-   g.addColorStop(0,'#4da7dd'); g.addColorStop(1,'#062d5b'); ctx.fillStyle=g; ctx.fillRect(C[0]-rad,C[1]-rad,rad*2,rad*2);
+   g.addColorStop(0,'#4da7dd');
+   g.addColorStop(1,'#062d5b');
+   ctx.fillStyle=g;
+   ctx.fillRect(C[0]-rad,C[1]-rad,rad*2,rad*2);
  }
+
  const shade=ctx.createRadialGradient(C[0]-rad*.34,C[1]-rad*.30,rad*.12,C[0]+rad*.20,C[1]+rad*.12,rad*1.05);
- shade.addColorStop(0,'rgba(255,255,255,.20)'); shade.addColorStop(.55,'rgba(255,255,255,0)'); shade.addColorStop(1,'rgba(0,12,32,.48)');
- ctx.fillStyle=shade; ctx.fillRect(C[0]-rad,C[1]-rad,rad*2,rad*2); ctx.restore();
- ctx.strokeStyle='rgba(174,232,255,.90)'; ctx.lineWidth=2.5; ctx.beginPath(); ctx.arc(C[0],C[1],rad,0,Math.PI*2); ctx.stroke();
+ shade.addColorStop(0,'rgba(255,255,255,.20)');
+ shade.addColorStop(.55,'rgba(255,255,255,0)');
+ shade.addColorStop(1,'rgba(0,12,32,.48)');
+ ctx.fillStyle=shade;
+ ctx.fillRect(C[0]-rad,C[1]-rad,rad*2,rad*2);
+ ctx.restore();
+
+ ctx.strokeStyle='rgba(174,232,255,.90)';
+ ctx.lineWidth=2.5;
+ ctx.beginPath();
+ ctx.arc(C[0],C[1],rad,0,Math.PI*2);
+ ctx.stroke();
  ctx.restore();
 }
 async function loop(){
@@ -446,10 +545,10 @@ async function loop(){
     const now=performance.now(); let pose=null;
     if(rawPose){ pose=smoothPose(rawPose); lastPose=pose; lastPoseAt=now; }
     else if(lastPose && (now-lastPoseAt)<=FALLBACK_MS){ pose=lastPose; }
-    else if(!ds.length){ smoothedPose=null; }
+    else if(!ds.length){ smoothedPose=null; lastDrawState=null; }
     drawEarth(ds,W,H,pose);
     if(rawPose){
-      statusEl.textContent=(rawPose.single?'Transição suave • 1 face':'Terra ancorada ✓ • '+rawPose.faces.map(id=>N[id]).join(' + '))+' • erro '+rawPose.reproj.toFixed(1)+'px';
+      statusEl.textContent=(rawPose.single?'Transição estabilizada • 1 face':'Terra ancorada ✓ • '+rawPose.faces.map(id=>N[id]).join(' + '))+' • erro '+rawPose.reproj.toFixed(1)+'px';
     }else if(pose){
       statusEl.textContent='Mantendo última pose…';
     }else{
