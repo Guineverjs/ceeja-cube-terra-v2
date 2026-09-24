@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>CEEJA Cube — Terra Realista v2.7</title>
+<title>CEEJA Cube — Terra Realista v2.8</title>
 <style>
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070a;font-family:Arial,sans-serif;color:white}
 #video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover;background:#000}
@@ -18,7 +18,7 @@
 <body>
 <video id="video" autoplay muted playsinline></video>
 <canvas id="overlay"></canvas>
-<div id="top"><div id="title">🌍 CEEJA Cube — Terra Realista v2.7</div>
+<div id="top"><div id="title">🌍 CEEJA Cube — Terra Realista v2.8</div>
 <div id="status">Pronto para iniciar.</div><button id="start">ABRIR CÂMERA</button></div>
 <div id="faces"><span class="muted">Nenhuma face detectada ainda.</span></div>
 <canvas id="work" width="480" height="360" style="display:none"></canvas>
@@ -38,10 +38,10 @@ overlay=document.getElementById("overlay"), statusEl=document.getElementById("st
 facesEl=document.getElementById("faces"), start=document.getElementById("start");
 let ready=false, busy=false, cvReady=false, cv=null;
 let templates=[], lastPose=null, lastPoseAt=0, smoothedPose=null;
-let lastMultiPose=null, lastMultiPoseAt=0, lastDrawState=null;
+let lastMultiPose=null, lastMultiPoseAt=0, lastDrawState=null, lastMultiDrawState=null;
 let strongAnchorUntil=0;
 
-const FALLBACK_MS=650;
+const FALLBACK_MS=320;
 const POS_ALPHA_MULTI=.42, POS_ALPHA_SINGLE=.18;
 const ROT_ALPHA_MULTI=.38, ROT_ALPHA_SINGLE=.16;
 const MAX_SINGLE_JUMP_M=.055;
@@ -54,6 +54,10 @@ const SINGLE_SCREEN_RADIUS_STEP=.045;
 const SINGLE_SCREEN_CENTER_BLEND=.22;
 const MULTI_SCREEN_RADIUS_BLEND=.28;
 const MULTI_SCREEN_CENTER_BLEND=.34;
+const SINGLE_RADIUS_FROM_MULTI_MIN=.90;
+const SINGLE_RADIUS_FROM_MULTI_MAX=1.10;
+const MAX_SINGLE_RADIUS_VIEWPORT=.42;
+const MAX_MULTI_RADIUS_VIEWPORT=.48;
 const HALF=.022;          // cube: 44 mm
 const TAG_HALF=.01585;    // marker black square: 31.7 mm / 2
 const EARTH_RADIUS=.050;  // 12 cm diameter virtual Earth
@@ -459,6 +463,7 @@ function render(ds){
 function drawEarth(ds,sw,sh,pose){
  const ctx=overlay.getContext('2d');
  ctx.clearRect(0,0,overlay.width,overlay.height);
+
  if(!pose){
    lastDrawState=null;
    return;
@@ -468,32 +473,57 @@ function drawEarth(ds,sw,sh,pose){
  const ox=(vw-sw*scale)/2, oy=(vh-sh*scale)/2, dp=devicePixelRatio;
  const S=p=>[ox+p[0]*scale, oy+p[1]*scale];
  const C3=[0,0,0], RADIUS=EARTH_RADIUS;
+
  const cp=project3(C3,pose), xp=project3([RADIUS,0,0],pose), yp=project3([0,RADIUS,0],pose);
  if(!cp||!xp||!yp)return;
 
  let C=S(cp), X=S(xp), Y=S(yp);
  let rad=(Math.hypot(X[0]-C[0],X[1]-C[1])+Math.hypot(Y[0]-C[0],Y[1]-C[1]))/2;
 
- // Estabilização em tela: quando só há 1 face, não deixamos o raio
- // nem o centro "saltarem" bruscamente.
- if(lastDrawState){
-   if(pose.single){
-     const minR=lastDrawState.rad*(1-SINGLE_SCREEN_RADIUS_STEP);
-     const maxR=lastDrawState.rad*(1+SINGLE_SCREEN_RADIUS_STEP);
-     rad=clamp(rad,minR,maxR);
-     C=[
-       lastDrawState.cx + (C[0]-lastDrawState.cx)*SINGLE_SCREEN_CENTER_BLEND,
-       lastDrawState.cy + (C[1]-lastDrawState.cy)*SINGLE_SCREEN_CENTER_BLEND
-     ];
+ // Rejeita tamanhos fisicamente absurdos antes de desenhar.
+ const maxViewportRad=Math.min(vw,vh)*(pose.single?MAX_SINGLE_RADIUS_VIEWPORT:MAX_MULTI_RADIUS_VIEWPORT);
+ if(!Number.isFinite(rad) || rad<8 || rad>maxViewportRad){
+   if(lastDrawState){
+     C=[lastDrawState.cx,lastDrawState.cy];
+     rad=lastDrawState.rad;
    }else{
+     return;
+   }
+ }
+
+ const now=performance.now();
+
+ // Multiface vira uma "régua" confiável de escala.
+ if(!pose.single){
+   if(lastDrawState){
      rad=lastDrawState.rad + (rad-lastDrawState.rad)*MULTI_SCREEN_RADIUS_BLEND;
      C=[
        lastDrawState.cx + (C[0]-lastDrawState.cx)*MULTI_SCREEN_CENTER_BLEND,
        lastDrawState.cy + (C[1]-lastDrawState.cy)*MULTI_SCREEN_CENTER_BLEND
      ];
    }
+   lastMultiDrawState={cx:C[0],cy:C[1],rad,at:now};
+ }else{
+   // Com uma face só, trava a escala perto da última escala multiface.
+   if(lastMultiDrawState && (now-lastMultiDrawState.at)<=MULTI_ANCHOR_MS){
+     const minR=lastMultiDrawState.rad*SINGLE_RADIUS_FROM_MULTI_MIN;
+     const maxR=lastMultiDrawState.rad*SINGLE_RADIUS_FROM_MULTI_MAX;
+     rad=clamp(rad,minR,maxR);
+   }else if(lastDrawState){
+     const minR=lastDrawState.rad*(1-SINGLE_SCREEN_RADIUS_STEP);
+     const maxR=lastDrawState.rad*(1+SINGLE_SCREEN_RADIUS_STEP);
+     rad=clamp(rad,minR,maxR);
+   }
+
+   if(lastDrawState){
+     C=[
+       lastDrawState.cx + (C[0]-lastDrawState.cx)*SINGLE_SCREEN_CENTER_BLEND,
+       lastDrawState.cy + (C[1]-lastDrawState.cy)*SINGLE_SCREEN_CENTER_BLEND
+     ];
+   }
  }
- lastDrawState={cx:C[0], cy:C[1], rad, single:pose.single, at:performance.now()};
+
+ lastDrawState={cx:C[0],cy:C[1],rad,single:pose.single,at:now};
 
  ctx.save();
  ctx.scale(dp,dp);
@@ -552,12 +582,12 @@ async function loop(){
     const now=performance.now(); let pose=null;
     if(rawPose){ pose=smoothPose(rawPose); lastPose=pose; lastPoseAt=now; }
     else if(lastPose && (now-lastPoseAt)<=FALLBACK_MS){ pose=lastPose; }
-    else if(!ds.length){ smoothedPose=null; lastDrawState=null; }
+    else if(!ds.length){ smoothedPose=null; lastDrawState=null; lastMultiDrawState=null; lastMultiPose=null; }
     drawEarth(ds,W,H,pose);
     if(rawPose){
       statusEl.textContent=(rawPose.single?'Âncora suave • 1 face':'Âncora forte ✓ • '+rawPose.faces.map(id=>N[id]).join(' + '))+' • erro '+rawPose.reproj.toFixed(1)+'px';
     }else if(pose){
-      statusEl.textContent='Mantendo última pose…';
+      statusEl.textContent='Ponte curta de rastreamento…';
     }else{
       statusEl.textContent=ds.length?'Face reconhecida • ajustando pose…':'Câmera aberta • procurando o cubo…';
     }
