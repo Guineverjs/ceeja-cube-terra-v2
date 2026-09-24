@@ -1,2 +1,4 @@
 
 Versão v4.0 AutoCal: calibração automática durante o uso. Coleta observações multiface em diferentes combinações e tamanhos, testa vários FOVs e escolhe o que reduz o erro de reprojeção. Salva o FOV no localStorage. Dois toques rápidos no título apagam a calibração salva.
+
+Versão v4.1: corrige barra de AutoCal que podia travar. Agora todas as observações multiface válidas são coletadas em intervalos regulares; a barra reflete os requisitos reais (8 amostras, 2 combinações de faces e 2 distâncias), e as instruções dizem exatamente o que falta.

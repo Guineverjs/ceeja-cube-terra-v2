@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>CEEJA Cube — Tracker 2.0 • AutoCal v4.0</title>
+<title>CEEJA Cube — Tracker 2.0 • AutoCal v4.1</title>
 <style>
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070a;font-family:Arial,sans-serif;color:white}
 #video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover;background:#000}
@@ -21,7 +21,7 @@
 <body>
 <video id="video" autoplay muted playsinline></video>
 <canvas id="overlay"></canvas>
-<div id="top"><div id="title">🌍 CEEJA Cube — Tracker 2.0 • AutoCal v4.0</div>
+<div id="top"><div id="title">🌍 CEEJA Cube — Tracker 2.0 • AutoCal v4.1</div>
 <div id="status">Pronto para iniciar.</div><button id="start">ABRIR CÂMERA</button></div>
 <div id="faces"><span class="muted">Nenhuma face detectada ainda.</span></div>
 <div id="planetLabel">EARTH • 3D</div>
@@ -84,7 +84,7 @@ const DEDUPE_DIST=32;
 const DETECT_INTERVAL_MS=55;
 const TARGET_LERP_MULTI=.20, TARGET_LERP_SINGLE=.10;
 const ROT_LERP_MULTI=.20, ROT_LERP_SINGLE=.10;
-const CALIB_MIN_SAMPLES=10, CALIB_TARGET_SAMPLES=18, CALIB_SAMPLE_GAP_MS=420;
+const CALIB_MIN_SAMPLES=8, CALIB_TARGET_SAMPLES=12, CALIB_SAMPLE_GAP_MS=500;
 
 function fit(){
  overlay.width=innerWidth*devicePixelRatio;overlay.height=innerHeight*devicePixelRatio;
@@ -263,11 +263,78 @@ function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
 
 function loadSavedCalibration(){try{const raw=localStorage.getItem(CALIB_KEY);if(!raw)return false;const v=JSON.parse(raw);if(v&&Number.isFinite(v.fov)&&v.fov>=30&&v.fov<=85){cameraFovDeg=v.fov;calibComplete=true;updateCameraIntrinsics();return true}}catch(e){}return false}
 function resetCalibration(){calibSamples=[];calibFaceCombos=new Set();calibScaleBuckets=new Set();calibComplete=false;calibBusy=false;cameraFovDeg=45;try{localStorage.removeItem(CALIB_KEY)}catch(e){}updateCalibUI();updateCameraIntrinsics()}
-function updateCalibUI(){if(calibComplete){calibEl.style.display='none';return}calibEl.style.display='block';const count=calibSamples.length;const diversity=Math.min(1,(calibFaceCombos.size/5)*.55+(calibScaleBuckets.size/3)*.45);const progress=Math.min(96,Math.round((count/CALIB_TARGET_SAMPLES)*70+diversity*30));calibFill.style.width=progress+'%';calibText.textContent=count<3?'Gire o cubo devagar para melhorar o rastreamento…':'Calibrando câmera durante o uso… '+progress+'%'}
+function updateCalibUI(){
+ if(calibComplete){calibEl.style.display='none';return}
+ calibEl.style.display='block';
+
+ const count=calibSamples.length;
+ const samplePart=Math.min(1,count/CALIB_TARGET_SAMPLES);
+ const comboPart=Math.min(1,calibFaceCombos.size/2);
+ const scalePart=Math.min(1,calibScaleBuckets.size/2);
+
+ // A barra agora representa exatamente os três requisitos reais.
+ const progress=Math.min(99,Math.round(samplePart*60 + comboPart*20 + scalePart*20));
+ calibFill.style.width=progress+'%';
+
+ if(count<3){
+   calibText.textContent='Mostre duas faces do cubo ao mesmo tempo e gire devagar…';
+ }else if(calibFaceCombos.size<2){
+   calibText.textContent='Ótimo. Agora gire para mostrar outra combinação de duas faces…';
+ }else if(calibScaleBuckets.size<2){
+   calibText.textContent='Agora aproxime ou afaste um pouco o cubo…';
+ }else if(count<CALIB_MIN_SAMPLES){
+   calibText.textContent='Continue girando devagar… '+progress+'%';
+ }else{
+   calibText.textContent='Dados suficientes ✓ • ajustando a câmera…';
+ }
+}
 function cloneDetectionSet(ds){return ds.map(d=>({id:d.id,score:d.score,corners:d.corners.map(p=>({x:p.x,y:p.y}))}))}
-function maybeCollectCalibration(ds,W,H){if(calibComplete||calibBusy||ds.length<2)return;const now=performance.now();if(now-lastCalibSampleAt<CALIB_SAMPLE_GAP_MS)return;const ids=ds.map(d=>d.id).sort((a,b)=>a-b);const combo=ids.join('-');let avgArea=0;for(const d of ds)avgArea+=quadArea(d.corners);avgArea/=ds.length;const frac=avgArea/(W*H);const bucket=frac<.025?'far':(frac<.07?'mid':'near');const useful=!calibFaceCombos.has(combo)||!calibScaleBuckets.has(bucket)||calibSamples.length<6;if(!useful)return;calibSamples.push({ds:cloneDetectionSet(ds),W,H,combo,bucket});calibFaceCombos.add(combo);calibScaleBuckets.add(bucket);lastCalibSampleAt=now;if(calibSamples.length>CALIB_TARGET_SAMPLES)calibSamples.shift();updateCalibUI();if(calibSamples.length>=CALIB_MIN_SAMPLES&&calibFaceCombos.size>=3&&calibScaleBuckets.size>=2)setTimeout(runAutoCalibration,60)}
+function maybeCollectCalibration(ds,W,H){
+ if(calibComplete||calibBusy) return;
+
+ // Uma face ainda serve para a experiência, mas não entra na AutoCal.
+ if(ds.length<2){
+   updateCalibUI();
+   return;
+ }
+
+ const now=performance.now();
+ if(now-lastCalibSampleAt<CALIB_SAMPLE_GAP_MS) return;
+
+ const ids=ds.map(d=>d.id).sort((a,b)=>a-b);
+ const combo=ids.join('-');
+
+ let avgArea=0;
+ for(const d of ds) avgArea+=quadArea(d.corners);
+ avgArea/=ds.length;
+
+ const frac=avgArea/(W*H);
+ const bucket=frac<.025?'far':(frac<.07?'mid':'near');
+
+ // v4.1: sempre coleta uma nova observação multiface em intervalos regulares.
+ // Antes, amostras repetidas eram descartadas e a barra podia ficar presa.
+ calibSamples.push({
+   ds:cloneDetectionSet(ds),
+   W,H,combo,bucket,
+   area:frac,
+   time:now
+ });
+ calibFaceCombos.add(combo);
+ calibScaleBuckets.add(bucket);
+ lastCalibSampleAt=now;
+
+ if(calibSamples.length>CALIB_TARGET_SAMPLES) calibSamples.shift();
+
+ updateCalibUI();
+
+ if(calibSamples.length>=CALIB_MIN_SAMPLES &&
+    calibFaceCombos.size>=2 &&
+    calibScaleBuckets.size>=2){
+   setTimeout(runAutoCalibration,80);
+ }
+}
 function solveSampleAtFov(sample,fovDeg){const obj=getOBJ();const good=sample.ds.filter(d=>obj[d.id]&&d.corners&&d.corners.length===4);if(good.length<2)return 999;let op=[],ip=[];for(const d of good){for(let i=0;i<4;i++){op.push(...obj[d.id][i]);ip.push(d.corners[i].x,d.corners[i].y)}}const n=ip.length/2;const objectPoints=cv.matFromArray(n,1,cv.CV_64FC3,op);const imagePoints=cv.matFromArray(n,1,cv.CV_64FC2,ip);const fov=fovDeg*Math.PI/180;const fx=(sample.W/2)/Math.tan(fov/2),fy=fx,cx=sample.W/2,cy=sample.H/2;const K=cv.matFromArray(3,3,cv.CV_64F,[fx,0,cx,0,fy,cy,0,0,1]);const distm=cv.Mat.zeros(4,1,cv.CV_64F),rvec=new cv.Mat(),tvec=new cv.Mat();let err=999;try{const ok=cv.solvePnP(objectPoints,imagePoints,K,distm,rvec,tvec,false,cv.SOLVEPNP_ITERATIVE);if(ok){const Rm=new cv.Mat();cv.Rodrigues(rvec,Rm);const pose={R:Array.from(Rm.data64F),t:Array.from(tvec.data64F),fx,fy,cx,cy};let sum=0,count=0;for(const d of good){const pts=obj[d.id];for(let i=0;i<4;i++){const q=project3(pts[i],pose);if(!q)continue;const dx=q[0]-d.corners[i].x,dy=q[1]-d.corners[i].y;sum+=dx*dx+dy*dy;count++}}err=count?Math.sqrt(sum/count):999;Rm.delete()}}catch(e){}objectPoints.delete();imagePoints.delete();K.delete();distm.delete();rvec.delete();tvec.delete();return err}
-async function runAutoCalibration(){if(calibBusy||calibComplete||calibSamples.length<CALIB_MIN_SAMPLES)return;calibBusy=true;calibText.textContent='Ajustando câmera…';try{const samples=calibSamples.slice(-12);let bestFov=cameraFovDeg,bestErr=Infinity;for(let f=34;f<=74;f+=4){let errs=[];for(const s of samples){const e=solveSampleAtFov(s,f);if(Number.isFinite(e)&&e<40)errs.push(e)}if(errs.length<Math.max(5,Math.floor(samples.length*.6)))continue;errs.sort((a,b)=>a-b);const trimmed=errs.slice(0,Math.max(3,Math.ceil(errs.length*.8)));const mean=trimmed.reduce((a,b)=>a+b,0)/trimmed.length;if(mean<bestErr){bestErr=mean;bestFov=f}await new Promise(r=>setTimeout(r,0))}for(let f=Math.max(30,bestFov-4);f<=Math.min(82,bestFov+4);f+=1){let errs=[];for(const s of samples){const e=solveSampleAtFov(s,f);if(Number.isFinite(e)&&e<40)errs.push(e)}if(errs.length<5)continue;errs.sort((a,b)=>a-b);const trimmed=errs.slice(0,Math.max(3,Math.ceil(errs.length*.8)));const mean=trimmed.reduce((a,b)=>a+b,0)/trimmed.length;if(mean<bestErr){bestErr=mean;bestFov=f}await new Promise(r=>setTimeout(r,0))}if(Number.isFinite(bestErr)&&bestErr<9){cameraFovDeg=bestFov;calibComplete=true;try{localStorage.setItem(CALIB_KEY,JSON.stringify({fov:bestFov,error:bestErr,ts:Date.now()}))}catch(e){}updateCameraIntrinsics();calibFill.style.width='100%';calibText.textContent='Calibração concluída ✓';calibEl.style.display='block';setTimeout(()=>{calibEl.style.display='none'},1400);statusEl.textContent='Câmera calibrada ✓ • FOV '+bestFov.toFixed(0)+'°'}else{calibText.textContent='Continue girando o cubo devagar…'}}finally{calibBusy=false}}
+async function runAutoCalibration(){if(calibBusy||calibComplete||calibSamples.length<CALIB_MIN_SAMPLES)return;calibBusy=true;calibText.textContent='Ajustando câmera…';try{const samples=calibSamples.slice(-12);let bestFov=cameraFovDeg,bestErr=Infinity;for(let f=34;f<=74;f+=4){let errs=[];for(const s of samples){const e=solveSampleAtFov(s,f);if(Number.isFinite(e)&&e<40)errs.push(e)}if(errs.length<Math.max(5,Math.floor(samples.length*.6)))continue;errs.sort((a,b)=>a-b);const trimmed=errs.slice(0,Math.max(3,Math.ceil(errs.length*.8)));const mean=trimmed.reduce((a,b)=>a+b,0)/trimmed.length;if(mean<bestErr){bestErr=mean;bestFov=f}await new Promise(r=>setTimeout(r,0))}for(let f=Math.max(30,bestFov-4);f<=Math.min(82,bestFov+4);f+=1){let errs=[];for(const s of samples){const e=solveSampleAtFov(s,f);if(Number.isFinite(e)&&e<40)errs.push(e)}if(errs.length<5)continue;errs.sort((a,b)=>a-b);const trimmed=errs.slice(0,Math.max(3,Math.ceil(errs.length*.8)));const mean=trimmed.reduce((a,b)=>a+b,0)/trimmed.length;if(mean<bestErr){bestErr=mean;bestFov=f}await new Promise(r=>setTimeout(r,0))}if(Number.isFinite(bestErr)&&bestErr<12){cameraFovDeg=bestFov;calibComplete=true;try{localStorage.setItem(CALIB_KEY,JSON.stringify({fov:bestFov,error:bestErr,ts:Date.now()}))}catch(e){}updateCameraIntrinsics();calibFill.style.width='100%';calibText.textContent='Calibração concluída ✓';calibEl.style.display='block';setTimeout(()=>{calibEl.style.display='none'},1400);statusEl.textContent='Câmera calibrada ✓ • FOV '+bestFov.toFixed(0)+'°'}else{calibText.textContent='Ainda falta variedade. Mostre duas faces e mude um pouco a distância…'}}finally{calibBusy=false}}
 loadSavedCalibration();updateCalibUI();
 async function initDetector(){
  statusEl.textContent="Câmera aberta ✓ • preparando detector…";
