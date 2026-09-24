@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>CEEJA Cube — Terra Realista v2.3</title>
+<title>CEEJA Cube — Terra Realista v2.4</title>
 <style>
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070a;font-family:Arial,sans-serif;color:white}
 #video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover;background:#000}
@@ -14,12 +14,11 @@
 .ok{font-weight:800}.muted{opacity:.65}
 #start{margin-top:10px;border:0;border-radius:999px;padding:10px 18px;font-weight:800;font-size:14px}
 </style>
-<script src="https://cdn.jsdelivr.net/npm/opencv.js@1.2.1/opencv.js" onload="window._cvLoaded=true" onerror="window._cvLoadFailed=true"></script>
 </head>
 <body>
 <video id="video" autoplay muted playsinline></video>
 <canvas id="overlay"></canvas>
-<div id="top"><div id="title">🌍 CEEJA Cube — Terra Realista v2.3</div>
+<div id="top"><div id="title">🌍 CEEJA Cube — Terra Realista v2.4</div>
 <div id="status">Pronto para iniciar.</div><button id="start">ABRIR CÂMERA</button></div>
 <div id="faces"><span class="muted">Nenhuma face detectada ainda.</span></div>
 <canvas id="work" width="480" height="360" style="display:none"></canvas>
@@ -37,7 +36,7 @@ const N={0:"FRENTE",1:"DIREITA",2:"ATRÁS",3:"ESQUERDA",4:"TOPO",5:"BASE"};
 const video=document.getElementById("video"), work=document.getElementById("work"),
 overlay=document.getElementById("overlay"), statusEl=document.getElementById("status"),
 facesEl=document.getElementById("faces"), start=document.getElementById("start");
-let ready=false, busy=false, cvReady=false;
+let ready=false, busy=false, cvReady=false, cv=null;
 let templates=[], lastPose=null, lastPoseAt=0, smoothedPose=null;
 
 const FALLBACK_MS=220;
@@ -61,21 +60,24 @@ function fit(){
 addEventListener("resize",fit); fit();
 
 async function waitForCV(){
- const t0=performance.now();
- while(true){
-   if(window._cvLoadFailed) throw new Error("Falha ao baixar o motor OpenCV.");
-   if(window._cvLoaded && typeof cv!=="undefined"){
-     try{
-       if(cv instanceof Promise) cv=await cv;
-       if(cv && cv.Mat && cv.findContours && cv.solvePnP){
-         cvReady=true; return true;
-       }
-     }catch(e){}
+ if(cvReady && cv) return true;
+
+ statusEl.textContent="Câmera aberta ✓ • baixando motor de visão…";
+ try{
+   // Pacote moderno feito especificamente para uso do OpenCV.js no navegador.
+   const mod = await import("https://esm.run/@opencvjs/web@5.0.0-release.2");
+   statusEl.textContent="Câmera aberta ✓ • iniciando motor de visão…";
+   cv = await mod.loadOpenCV();
+
+   if(!cv || !cv.Mat || !cv.findContours || !cv.solvePnP){
+     throw new Error("O motor carregou, mas faltam funções necessárias.");
    }
-   const elapsed=performance.now()-t0;
-   if(elapsed>20000) throw new Error("OpenCV demorou mais de 20 s para iniciar. Recarregue a página com internet ativa.");
-   statusEl.textContent="Câmera aberta ✓ • preparando motor de visão… "+Math.floor(elapsed/1000)+" s";
-   await new Promise(r=>setTimeout(r,120));
+
+   cvReady=true;
+   return true;
+ }catch(e){
+   console.error("OpenCV loader:",e);
+   throw new Error("Não foi possível carregar o motor de visão: "+(e?.message||e));
  }
 }
 async function waitImgs(ids){
@@ -118,7 +120,7 @@ function centerOf(c){return {x:(c[0].x+c[1].x+c[2].x+c[3].x)/4,y:(c[0].y+c[1].y+
 function dist(a,b){const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy)}
 
 async function initDetector(){
- statusEl.textContent="Câmera aberta ✓ • carregando motor de visão…";
+ statusEl.textContent="Câmera aberta ✓ • preparando detector…";
  try{
    await waitForCV();
    statusEl.textContent="Motor de visão pronto ✓ • carregando marcadores…";

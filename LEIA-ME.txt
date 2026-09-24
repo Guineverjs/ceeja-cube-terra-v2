@@ -12,3 +12,5 @@ Correção v2.2: carregamento do OpenCV trocado por build único via jsDelivr, c
 Nesta variante, os 6 arquivos PNG dos marcadores ficam soltos na raiz do repositório, ao lado do index.html.
 
 Correção v2.3: o OpenCV/detector só é inicializado depois que a usuária toca em ABRIR CÂMERA.
+
+Correção v2.4: removido o carregador antigo do OpenCV. Agora o motor é importado sob demanda com @opencvjs/web apenas depois de abrir a câmera.
