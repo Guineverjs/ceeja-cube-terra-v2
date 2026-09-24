@@ -1,2 +1,2 @@
 
-Versão v3.2: muda a ancoragem para pose 3D real com câmera em perspectiva (Three.js PerspectiveCamera + setViewOffset). A Terra deixa de usar centro/raio em tela e passa a seguir posição e rotação 6DoF do cubo, com animação desacoplada do detector.
+Versão v3.3: ajuste fino visual e espacial para aproximar do Merge Cube. Terra reduzida (EARTH_RADIUS 0.030), objeto levemente recuado no eixo Z, ancoragem de 1 face mais rígida em Z/XY, Lua menor e mais próxima, Sol e brilho mais discretos, e iluminação geral mais suave.

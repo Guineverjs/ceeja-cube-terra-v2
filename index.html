@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>CEEJA Cube — Terra 3D v3.2</title>
+<title>CEEJA Cube — Terra 3D v3.3</title>
 <style>
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070a;font-family:Arial,sans-serif;color:white}
 #video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover;background:#000}
@@ -19,7 +19,7 @@
 <body>
 <video id="video" autoplay muted playsinline></video>
 <canvas id="overlay"></canvas>
-<div id="top"><div id="title">🌍 CEEJA Cube — Terra 3D v3.2</div>
+<div id="top"><div id="title">🌍 CEEJA Cube — Terra 3D v3.3</div>
 <div id="status">Pronto para iniciar.</div><button id="start">ABRIR CÂMERA</button></div>
 <div id="faces"><span class="muted">Nenhuma face detectada ainda.</span></div>
 <div id="planetLabel">EARTH • 3D</div>
@@ -55,9 +55,9 @@ const ROT_ALPHA_MULTI=.38, ROT_ALPHA_SINGLE=.16;
 const MAX_SINGLE_JUMP_M=.055;
 const MAX_REPROJ_MULTI=8.0, MAX_REPROJ_SINGLE=5.8;
 const MULTI_ANCHOR_MS=2400;
-const SINGLE_Z_CLAMP=.010;
-const SINGLE_Z_BLEND=.88;
-const SINGLE_XY_BLEND=.55;
+const SINGLE_Z_CLAMP=.005;
+const SINGLE_Z_BLEND=.96;
+const SINGLE_XY_BLEND=.66;
 const SINGLE_SCREEN_RADIUS_STEP=.045;
 const SINGLE_SCREEN_CENTER_BLEND=.22;
 const MULTI_SCREEN_RADIUS_BLEND=.28;
@@ -68,15 +68,15 @@ const MAX_SINGLE_RADIUS_VIEWPORT=.42;
 const MAX_MULTI_RADIUS_VIEWPORT=.48;
 const HALF=.022;          // cube: 44 mm
 const TAG_HALF=.01585;    // marker black square: 31.7 mm / 2
-const EARTH_RADIUS=.040;  // 8 cm diameter virtual Earth, close to Merge Cube feel
+const EARTH_RADIUS=.030;  // 6 cm diameter virtual Earth, calibrado para sensação mais próxima do Merge Cube
 const TEMPLATE_SIZE=32;
 const MIN_MATCH=0.67;
 const MIN_AREA=850;
 const MAX_AREA_FRAC=.34;
 const DEDUPE_DIST=32;
 const DETECT_INTERVAL_MS=55;
-const TARGET_LERP_MULTI=.24, TARGET_LERP_SINGLE=.12;
-const ROT_LERP_MULTI=.24, ROT_LERP_SINGLE=.12;
+const TARGET_LERP_MULTI=.20, TARGET_LERP_SINGLE=.10;
+const ROT_LERP_MULTI=.20, ROT_LERP_SINGLE=.10;
 
 function fit(){
  overlay.width=innerWidth*devicePixelRatio;overlay.height=innerHeight*devicePixelRatio;
@@ -121,9 +121,9 @@ function initThree(){
  cam3d.position.set(0,0,0);
  updateCameraIntrinsics();
 
- const amb=new THREE.AmbientLight(0xd8eeff,1.65);
+ const amb=new THREE.AmbientLight(0xd8eeff,1.42);
  scene3d.add(amb);
- const dir=new THREE.DirectionalLight(0xffffff,1.65);
+ const dir=new THREE.DirectionalLight(0xffffff,1.18);
  dir.position.set(.8,.3,.5);
  scene3d.add(dir);
 
@@ -133,6 +133,7 @@ function initThree(){
 
  content3d=new THREE.Group();
  content3d.scale.set(EARTH_RADIUS,EARTH_RADIUS,EARTH_RADIUS);
+ content3d.position.set(0,0,-0.0015);
  anchor3d.add(content3d);
 
  const texImg=document.getElementById("earthTexture");
@@ -147,7 +148,7 @@ function initThree(){
    metalness:0,
    color:0xffffff,
    emissive:0x1a2638,
-   emissiveIntensity:.45
+   emissiveIntensity:.28
  });
  earthMesh=new THREE.Mesh(earthGeo,earthMat);
  content3d.add(earthMesh);
@@ -155,7 +156,7 @@ function initThree(){
  atmosphereMesh=new THREE.Mesh(
    new THREE.SphereGeometry(1.045,48,48),
    new THREE.MeshBasicMaterial({
-     color:0x71d5ff, transparent:true, opacity:.16,
+     color:0x71d5ff, transparent:true, opacity:.11,
      blending:THREE.AdditiveBlending, side:THREE.BackSide
    })
  );
@@ -163,27 +164,27 @@ function initThree(){
 
  moonPivot=new THREE.Group();
  moonMesh=new THREE.Mesh(
-   new THREE.SphereGeometry(.12,24,24),
+   new THREE.SphereGeometry(.08,24,24),
    new THREE.MeshStandardMaterial({color:0xd7dbe2, roughness:1, metalness:0})
  );
- moonMesh.position.set(1.38,.08,.12);
+ moonMesh.position.set(1.18,.05,.08);
  moonPivot.add(moonMesh);
  content3d.add(moonPivot);
 
  sunPivot=new THREE.Group();
- sunPivot.position.set(2.0,-.85,-.7);
+ sunPivot.position.set(1.6,-.72,-.58);
  const sunCore=new THREE.Mesh(
-   new THREE.SphereGeometry(.22,24,24),
+   new THREE.SphereGeometry(.16,24,24),
    new THREE.MeshBasicMaterial({color:0xffd46b, transparent:true, opacity:.98})
  );
  const sunGlow=new THREE.Mesh(
-   new THREE.SphereGeometry(.42,24,24),
-   new THREE.MeshBasicMaterial({color:0xffb247, transparent:true, opacity:.22, blending:THREE.AdditiveBlending})
+   new THREE.SphereGeometry(.30,24,24),
+   new THREE.MeshBasicMaterial({color:0xffb247, transparent:true, opacity:.14, blending:THREE.AdditiveBlending})
  );
  sunPivot.add(sunGlow); sunPivot.add(sunCore);
  content3d.add(sunPivot);
 
- sunLight=new THREE.PointLight(0xffefbc,2.2,0,2);
+ sunLight=new THREE.PointLight(0xffefbc,1.4,0,2);
  sunLight.position.copy(sunPivot.position);
  content3d.add(sunLight);
 
@@ -546,8 +547,8 @@ function smoothPose(raw){
  // para profundidade (Z) e parcialmente para X/Y.
  if(raw.single && lastMultiPose && (now-lastMultiPoseAt)<=MULTI_ANCHOR_MS){
    const freshStrong = now<strongAnchorUntil;
-   const zBlend = freshStrong ? .95 : SINGLE_Z_BLEND;
-   const xyBlend = freshStrong ? .72 : SINGLE_XY_BLEND;
+   const zBlend = freshStrong ? .98 : SINGLE_Z_BLEND;
+   const xyBlend = freshStrong ? .80 : SINGLE_XY_BLEND;
 
    const az=lastMultiPose.t[2];
    const dz=clamp(targetT[2]-az,-SINGLE_Z_CLAMP,SINGLE_Z_CLAMP);
@@ -590,7 +591,7 @@ function poseToThree(pose){
    0,0,0,1
  );
  const q=new THREE.Quaternion().setFromRotationMatrix(m);
- const pos=new THREE.Vector3(pose.t[0], -pose.t[1], -pose.t[2]);
+ const pos=new THREE.Vector3(pose.t[0], -pose.t[1], -pose.t[2]-0.004);
  return {pos, quat:q, single:!!pose.single, faces:pose.faces||[]};
 }
 function copyPoseState(st){
