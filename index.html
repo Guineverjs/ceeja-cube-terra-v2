@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<title>CEEJA Cube — Terra Realista v2.1</title>
+<title>CEEJA Cube — Terra Realista v2.2</title>
 <style>
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#05070a;font-family:Arial,sans-serif;color:white}
 #video{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover;background:#000}
@@ -14,23 +14,23 @@
 .ok{font-weight:800}.muted{opacity:.65}
 #start{margin-top:10px;border:0;border-radius:999px;padding:10px 18px;font-weight:800;font-size:14px}
 </style>
-<script async src="https://docs.opencv.org/4.x/opencv.js" onload="window._cvLoaded=true"></script>
+<script src="https://cdn.jsdelivr.net/npm/opencv.js@1.2.1/opencv.js" onload="window._cvLoaded=true" onerror="window._cvLoadFailed=true"></script>
 </head>
 <body>
 <video id="video" autoplay muted playsinline></video>
 <canvas id="overlay"></canvas>
-<div id="top"><div id="title">🌍 CEEJA Cube — Terra Realista v2.1</div>
+<div id="top"><div id="title">🌍 CEEJA Cube — Terra Realista v2.2</div>
 <div id="status">Pronto para iniciar.</div><button id="start">ABRIR CÂMERA</button></div>
 <div id="faces"><span class="muted">Nenhuma face detectada ainda.</span></div>
 <canvas id="work" width="480" height="360" style="display:none"></canvas>
 <img id="earthTexture" crossorigin="anonymous" src="https://threejs.org/examples/textures/planets/earth_atmos_2048.jpg" style="display:none">
 <div style="display:none">
-  <img id="tpl0" src="./markers/0_FRENTE.png">
-  <img id="tpl1" src="./markers/1_DIREITA.png">
-  <img id="tpl2" src="./markers/2_ATRAS.png">
-  <img id="tpl3" src="./markers/3_ESQUERDA.png">
-  <img id="tpl4" src="./markers/4_TOPO.png">
-  <img id="tpl5" src="./markers/5_BASE.png">
+  <img id="tpl0" src="./0_FRENTE.png">
+  <img id="tpl1" src="./1_DIREITA.png">
+  <img id="tpl2" src="./2_ATRAS.png">
+  <img id="tpl3" src="./3_ESQUERDA.png">
+  <img id="tpl4" src="./4_TOPO.png">
+  <img id="tpl5" src="./5_BASE.png">
 </div>
 <script>
 const N={0:"FRENTE",1:"DIREITA",2:"ATRÁS",3:"ESQUERDA",4:"TOPO",5:"BASE"};
@@ -61,10 +61,22 @@ function fit(){
 addEventListener("resize",fit); fit();
 
 async function waitForCV(){
- while(!window._cvLoaded || typeof cv==="undefined") await new Promise(r=>setTimeout(r,60));
- if(cv instanceof Promise) cv=await cv;
- while(!cv || !cv.Mat || !cv.findContours || !cv.solvePnP) await new Promise(r=>setTimeout(r,60));
- cvReady=true; return true;
+ const t0=performance.now();
+ while(true){
+   if(window._cvLoadFailed) throw new Error("Falha ao baixar o motor OpenCV.");
+   if(window._cvLoaded && typeof cv!=="undefined"){
+     try{
+       if(cv instanceof Promise) cv=await cv;
+       if(cv && cv.Mat && cv.findContours && cv.solvePnP){
+         cvReady=true; return true;
+       }
+     }catch(e){}
+   }
+   const elapsed=performance.now()-t0;
+   if(elapsed>20000) throw new Error("OpenCV demorou mais de 20 s para iniciar. Recarregue a página com internet ativa.");
+   statusEl.textContent="Carregando motor de visão… "+Math.floor(elapsed/1000)+" s";
+   await new Promise(r=>setTimeout(r,120));
+ }
 }
 async function waitImgs(ids){
  await Promise.all(ids.map(id=>new Promise((resolve,reject)=>{
